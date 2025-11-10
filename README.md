@@ -93,12 +93,12 @@ project/
 
 ### ステップ1: IAMロールの作成
 
-#### 1-1. FileScanner用ロール
+#### 1-1. Lambda関数用ロール（FileScanner & MetadataTagger共通）
 
 1. **IAM** → **ロール** → **ロールを作成**
 2. 信頼されたエンティティ: **AWS のサービス** → **Lambda**
 3. 許可ポリシー: **AWSLambdaBasicExecutionRole**
-4. ロール名: `FileScannerRole`
+4. ロール名: `S3MetadataLambdaRole`
 5. **ロールを作成**
 6. 作成したロールを開き、**「許可を追加」** → **「インラインポリシーを作成」**
 7. JSONタブで以下を貼り付け:
@@ -111,7 +111,8 @@ project/
       "Effect": "Allow",
       "Action": [
         "s3:ListBucket",
-        "s3:GetObject"
+        "s3:GetObject",
+        "s3:PutObject"
       ],
       "Resource": [
         "arn:aws:s3:::your-bucket-name",
@@ -124,37 +125,10 @@ project/
 
 **※ `your-bucket-name` を実際のバケット名に置き換えてください**
 
-8. ポリシー名: `FileScannerS3Policy`
+8. ポリシー名: `S3MetadataS3Policy`
 9. **ポリシーを作成**
 
-#### 1-2. MetadataTagger用ロール
-
-1. 同様の手順で新しいロールを作成
-2. 基本ポリシー: **AWSLambdaBasicExecutionRole**
-3. ロール名: `MetadataTaggerRole`
-4. インラインポリシーを追加:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::your-bucket-name/*"
-    }
-  ]
-}
-```
-
-**※ `your-bucket-name` を実際のバケット名に置き換えてください**
-
-5. ポリシー名: `MetadataTaggerPolicy`
-
-#### 1-3. Step Functions用ロール
+#### 1-2. Step Functions用ロール
 
 1. **IAM** → **ロール** → **ロールを作成**
 2. 信頼されたエンティティ: **AWS のサービス** → **Step Functions**
@@ -235,7 +209,7 @@ aws lambda publish-layer-version \
 2. **一から作成**
 3. 関数名: `FileScanner`
 4. ランタイム: **Python 3.11**
-5. 既存のロールを使用: `FileScannerRole`
+5. 既存のロールを使用: `S3MetadataLambdaRole`
 6. **関数の作成**
 
 #### 設定の変更
@@ -256,7 +230,7 @@ aws lambda publish-layer-version \
 2. **一から作成**
 3. 関数名: `MetadataTagger`
 4. ランタイム: **Python 3.11**
-5. 既存のロールを使用: `MetadataTaggerRole`
+5. 既存のロールを使用: `S3MetadataLambdaRole`
 6. **関数の作成**
 
 #### 設定の変更
@@ -555,8 +529,17 @@ aws lambda update-function-configuration \
 
 **対処**:
 1. **Lambda** → `MetadataTagger` → **設定** → **環境変数** を確認
-2. `OPENAI_API_KEY` と `SLACK_WEBHOOK_URL` が正しく設定されているか確認
+2. `OPENAI_API_KEY`、`OPENAI_MODEL`、`SLACK_WEBHOOK_URL` が正しく設定されているか確認
 3. CloudWatch Logsでエラーメッセージを確認
+
+### 問題: S3アクセス権限エラー
+
+**原因**: IAMロールの権限不足
+
+**対処**:
+1. **IAM** → **ロール** → `S3MetadataLambdaRole` を確認
+2. S3ポリシーに `s3:ListBucket`、`s3:GetObject`、`s3:PutObject` 権限があるか確認
+3. バケット名が正しく設定されているか確認
 
 ---
 
