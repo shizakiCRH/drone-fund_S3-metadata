@@ -1,0 +1,16 @@
+# Metadata Tagger Lambda Function の依存パッケージ
+#
+# 注意: 以下のパッケージはLambda Layerに含めるため、ここには記載しません:
+# - pymupdf (fitz)
+# - openpyxl
+#
+# Lambda Layer については layer/build_layer.sh を参照してください。
+
+# OpenAI API クライアント
+openai>=1.0.0
+
+# HTTP リクエスト用（Slack通知に使用）
+requests>=2.31.0
+
+# AWS SDK (boto3) は Lambda ランタイムに含まれているため不要
+# boto3

@@ -1,0 +1,99 @@
+{
+  "Comment": "S3ファイルメタデータ自動タグ付けシステム",
+  "StartAt": "ScanFiles",
+  "States": {
+    "ScanFiles": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:FileScanner",
+      "Comment": "S3バケット内の全ファイルをスキャンし、.metadata.jsonを除くファイルリストを取得",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0,
+          "Comment": "S3アクセスエラー等のリトライ"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "ScanFailure"
+        }
+      ],
+      "Next": "ProcessFiles"
+    },
+    "ProcessFiles": {
+      "Type": "Map",
+      "ItemsPath": "$.files",
+      "MaxConcurrency": 1,
+      "Comment": "各ファイルを順次処理（並列度1で順次実行）",
+      "Iterator": {
+        "StartAt": "TagMetadata",
+        "States": {
+          "TagMetadata": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:MetadataTagger",
+            "Comment": "ファイルからメタデータを抽出してmetadata.jsonを更新",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0,
+                "Comment": "一時的なエラーのリトライ"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "HandleError"
+              }
+            ],
+            "Next": "Success"
+          },
+          "HandleError": {
+            "Type": "Pass",
+            "Comment": "エラーが発生したファイルの処理結果を記録",
+            "Result": {
+              "status": "error"
+            },
+            "End": true
+          },
+          "Success": {
+            "Type": "Pass",
+            "Comment": "正常に処理されたファイルの結果を記録",
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.results",
+      "Next": "GenerateSummary"
+    },
+    "GenerateSummary": {
+      "Type": "Pass",
+      "Comment": "処理結果のサマリーを生成（オプション）",
+      "Parameters": {
+        "totalFiles.$": "States.ArrayLength($.results)",
+        "results.$": "$.results"
+      },
+      "End": true
+    },
+    "ScanFailure": {
+      "Type": "Fail",
+      "Comment": "ファイルスキャンに失敗した場合",
+      "Error": "FileScanFailed",
+      "Cause": "Failed to scan S3 bucket for files"
+    }
+  }
+}

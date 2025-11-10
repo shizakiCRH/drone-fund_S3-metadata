@@ -1,0 +1,7 @@
+# File Scanner Lambda Function の依存パッケージ
+#
+# この Lambda 関数は boto3 のみを使用します。
+# boto3 は Lambda ランタイムに含まれているため、追加のパッケージは不要です。
+
+# AWS SDK (boto3) は Lambda ランタイムに含まれているため不要
+# boto3
