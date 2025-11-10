@@ -60,15 +60,12 @@ logger.setLevel(logging.INFO)
 
 # AWSクライアントの初期化
 s3_client = boto3.client('s3')
-secrets_client = boto3.client('secretsmanager')
 
 # 環境変数から設定を取得
-OPENAI_API_KEY_SECRET = os.environ.get('OPENAI_API_KEY_SECRET', 'openai-api-key')
-SLACK_WEBHOOK_SECRET = os.environ.get('SLACK_WEBHOOK_SECRET', 'slack-webhook-url')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5-mini')  # デフォルトはgpt-5-mini
+SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL', '')
 MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 10 * 1024 * 1024))  # デフォルト10MB
-
-# シークレットのキャッシュ（Lambda実行環境で再利用される）
-_secrets_cache = {}
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
@@ -117,12 +114,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         text_content = truncate_text(text_content, max_length=10000)
 
         # 4. OpenAI APIでメタデータを抽出
-        openai_api_key = get_secret(OPENAI_API_KEY_SECRET, 'api_key')
         doc_type, doc_date = extract_metadata_with_ai(
-            api_key=openai_api_key,
+            api_key=OPENAI_API_KEY,
             file_path=file_key,
             file_content=text_content,
-            model="gpt-5-mini"
+            model=OPENAI_MODEL
         )
 
         # メタデータの検証
@@ -340,47 +336,6 @@ def write_metadata_json(bucket_name: str, metadata_key: str, metadata: Dict) -> 
         raise FileProcessingError(f"Failed to write metadata.json to S3: {str(e)}")
 
 
-def get_secret(secret_name: str, key: str) -> str:
-    """
-    AWS Secrets Managerからシークレットを取得する（キャッシュ機能付き）
-
-    Args:
-        secret_name (str): シークレット名
-        key (str): シークレット内のキー名
-
-    Returns:
-        str: シークレットの値
-
-    Raises:
-        Exception: シークレット取得に失敗した場合
-    """
-
-    # キャッシュをチェック
-    cache_key = f"{secret_name}:{key}"
-    if cache_key in _secrets_cache:
-        logger.info(f"Using cached secret: {secret_name}")
-        return _secrets_cache[cache_key]
-
-    try:
-        logger.info(f"Retrieving secret from Secrets Manager: {secret_name}")
-
-        response = secrets_client.get_secret_value(SecretId=secret_name)
-        secret_string = response['SecretString']
-        secret_dict = json.loads(secret_string)
-
-        if key not in secret_dict:
-            raise KeyError(f"Key '{key}' not found in secret '{secret_name}'")
-
-        value = secret_dict[key]
-
-        # キャッシュに保存
-        _secrets_cache[cache_key] = value
-
-        return value
-
-    except Exception as e:
-        logger.error(f"Error retrieving secret '{secret_name}': {str(e)}")
-        raise
 
 
 def handle_error(file_key: str, error_type: str, message: str) -> Dict[str, Any]:
@@ -401,9 +356,8 @@ def handle_error(file_key: str, error_type: str, message: str) -> Dict[str, Any]
     # Slack通知を送信（metadata_not_found以外）
     if error_type != "metadata_not_found":
         try:
-            slack_webhook_url = get_secret(SLACK_WEBHOOK_SECRET, 'webhook_url')
             send_error_notification(
-                webhook_url=slack_webhook_url,
+                webhook_url=SLACK_WEBHOOK_URL,
                 error_type=error_type,
                 file_key=file_key,
                 message=message

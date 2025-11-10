@@ -1,7 +1,7 @@
 """
 OpenAI Client Module
 
-OpenAI API (GPT-5-mini) を使用してファイル内容を解析し、
+OpenAI APIを使用してファイル内容を解析し、
 ドキュメント種別（doc_type）と日付（doc_date）を抽出するモジュール。
 
 機能:

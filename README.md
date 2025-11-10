@@ -50,7 +50,7 @@ Slack通知
 ## 前提条件
 
 ### 1. AWSアカウント
-- Lambda、S3、Step Functions、Secrets Managerへのアクセス権限
+- Lambda、S3、Step Functionsへのアクセス権限
 
 ### 2. OpenAI APIキー
 - GPT-5-miniが利用可能なAPIキー
@@ -91,37 +91,9 @@ project/
 
 ## デプロイ手順
 
-### ステップ1: Secrets Managerの設定
+### ステップ1: IAMロールの作成
 
-#### 1-1. OpenAI APIキーの登録
-
-1. **AWS Management Console** → **Secrets Manager** を開く
-2. **「シークレットを保存」** をクリック
-3. シークレットのタイプ: **その他のシークレットのタイプ**
-4. キー/値のペア:
-   ```
-   キー: api_key
-   値: sk-proj-...（取得済みのOpenAI APIキー）
-   ```
-5. シークレット名: `openai-api-key`
-6. 「次へ」→「次へ」→「保存」
-
-#### 1-2. Slack Webhook URLの登録
-
-1. 同様の手順で新しいシークレットを作成
-2. キー/値のペア:
-   ```
-   キー: webhook_url
-   値: https://hooks.slack.com/services/...
-   ```
-3. シークレット名: `slack-webhook-url`
-4. 「保存」
-
----
-
-### ステップ2: IAMロールの作成
-
-#### 2-1. FileScanner用ロール
+#### 1-1. FileScanner用ロール
 
 1. **IAM** → **ロール** → **ロールを作成**
 2. 信頼されたエンティティ: **AWS のサービス** → **Lambda**
@@ -155,7 +127,7 @@ project/
 8. ポリシー名: `FileScannerS3Policy`
 9. **ポリシーを作成**
 
-#### 2-2. MetadataTagger用ロール
+#### 1-2. MetadataTagger用ロール
 
 1. 同様の手順で新しいロールを作成
 2. 基本ポリシー: **AWSLambdaBasicExecutionRole**
@@ -173,26 +145,16 @@ project/
         "s3:PutObject"
       ],
       "Resource": "arn:aws:s3:::your-bucket-name/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue"
-      ],
-      "Resource": [
-        "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:openai-api-key-*",
-        "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:slack-webhook-url-*"
-      ]
     }
   ]
 }
 ```
 
-**※ `your-bucket-name`, `REGION`, `ACCOUNT_ID` を置き換えてください**
+**※ `your-bucket-name` を実際のバケット名に置き換えてください**
 
 5. ポリシー名: `MetadataTaggerPolicy`
 
-#### 2-3. Step Functions用ロール
+#### 1-3. Step Functions用ロール
 
 1. **IAM** → **ロール** → **ロールを作成**
 2. 信頼されたエンティティ: **AWS のサービス** → **Step Functions**
@@ -237,9 +199,9 @@ project/
 
 ---
 
-### ステップ3: Lambda Layerの作成
+### ステップ2: Lambda Layerの作成
 
-#### 3-1. ローカル環境でビルド
+#### 2-1. ローカル環境でビルド
 
 ```bash
 cd layer
@@ -248,7 +210,7 @@ bash build_layer.sh
 
 出力: `python-dependencies.zip` が生成されます
 
-#### 3-2. AWS Consoleでレイヤーを作成
+#### 2-2. AWS Consoleでレイヤーを作成
 
 1. **Lambda** → **レイヤー** → **レイヤーを作成**
 2. 名前: `python-dependencies`
@@ -267,7 +229,7 @@ aws lambda publish-layer-version \
 
 ---
 
-### ステップ4: Lambda Function 1（FileScanner）の作成
+### ステップ3: Lambda Function 1（FileScanner）の作成
 
 1. **Lambda** → **関数** → **関数の作成**
 2. **一から作成**
@@ -288,7 +250,7 @@ aws lambda publish-layer-version \
 
 ---
 
-### ステップ5: Lambda Function 2（MetadataTagger）の作成
+### ステップ4: Lambda Function 2（MetadataTagger）の作成
 
 1. **Lambda** → **関数** → **関数の作成**
 2. **一から作成**
@@ -305,9 +267,10 @@ aws lambda publish-layer-version \
    - **保存**
 
 8. **設定** → **環境変数** → **編集**
-   - `OPENAI_API_KEY_SECRET`: `openai-api-key`
-   - `SLACK_WEBHOOK_SECRET`: `slack-webhook-url`
-   - `MAX_FILE_SIZE`: `10485760`
+   - `OPENAI_API_KEY`: `sk-proj-...`（取得済みのOpenAI APIキー）
+   - `OPENAI_MODEL`: `gpt-5-mini`（使用するOpenAIモデル名、デフォルト: gpt-5-mini）
+   - `SLACK_WEBHOOK_URL`: `https://hooks.slack.com/services/...`（Slack Webhook URL）
+   - `MAX_FILE_SIZE`: `10485760`（10MB）
    - **保存**
 
 9. **レイヤー** → **レイヤーの追加**
@@ -332,7 +295,7 @@ zip -r function.zip .
 
 ---
 
-### ステップ6: Step Functionsステートマシンの作成
+### ステップ5: Step Functionsステートマシンの作成
 
 1. **Step Functions** → **ステートマシン** → **ステートマシンの作成**
 2. **コードでワークフローを記述**を選択
@@ -514,7 +477,7 @@ Lambda関数の環境変数を変更する場合:
 ```bash
 aws lambda update-function-configuration \
   --function-name MetadataTagger \
-  --environment "Variables={OPENAI_API_KEY_SECRET=openai-api-key,SLACK_WEBHOOK_SECRET=slack-webhook-url,MAX_FILE_SIZE=10485760}"
+  --environment "Variables={OPENAI_API_KEY=sk-proj-...,OPENAI_MODEL=gpt-5-mini,SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...,MAX_FILE_SIZE=10485760}"
 ```
 
 ### Lambda関数の設定変更（タイムアウト、メモリ等）
@@ -586,13 +549,14 @@ aws lambda update-function-configuration \
 1. CloudWatch Logs でエラー内容を確認
 2. `metadata_tagger/lambda_function.py` の `update_metadata` 関数を調整
 
-### 問題: Secrets Manager からシークレットを取得できない
+### 問題: OpenAI APIキーまたはSlack Webhook URLが正しく設定されていない
 
-**原因**: IAMロールの権限不足
+**原因**: Lambda環境変数の設定ミス
 
 **対処**:
-1. `MetadataTaggerRole` に `secretsmanager:GetSecretValue` 権限があるか確認
-2. シークレットのARNが正しいか確認
+1. **Lambda** → `MetadataTagger` → **設定** → **環境変数** を確認
+2. `OPENAI_API_KEY` と `SLACK_WEBHOOK_URL` が正しく設定されているか確認
+3. CloudWatch Logsでエラーメッセージを確認
 
 ---
 
