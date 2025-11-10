@@ -106,8 +106,8 @@ def extract_pdf_text(content: bytes) -> str:
 
         logger.info(f"PDF has {total_pages} pages")
 
-        # 各ページからテキストを抽出（最大50ページまで）
-        max_pages = min(total_pages, 50)
+        # 各ページからテキストを抽出（最大1ページのみ - ドキュメント種別判別に十分）
+        max_pages = min(total_pages, 1)
         for page_num in range(max_pages):
             page = pdf_document[page_num]
             text = page.get_text()
@@ -159,15 +159,15 @@ def extract_excel_text(content: bytes) -> str:
 
         logger.info(f"Excel has {len(sheet_names)} sheets: {sheet_names}")
 
-        # 各シートを処理（最大5シートまで）
-        max_sheets = min(len(sheet_names), 5)
+        # 各シートを処理（最大1シートのみ - ドキュメント種別判別に十分）
+        max_sheets = min(len(sheet_names), 1)
         for sheet_name in sheet_names[:max_sheets]:
             sheet = workbook[sheet_name]
 
             text_parts.append(f"=== Sheet: {sheet_name} ===")
 
-            # シートの内容を行ごとに読み取り（最大100行まで）
-            max_rows = min(sheet.max_row, 100)
+            # シートの内容を行ごとに読み取り（最大15行まで）
+            max_rows = min(sheet.max_row, 15)
             for row_idx, row in enumerate(sheet.iter_rows(max_row=max_rows, values_only=True), start=1):
                 # 空行をスキップ
                 if all(cell is None or str(cell).strip() == '' for cell in row):
@@ -235,15 +235,16 @@ def extract_text_file(content: bytes) -> str:
         raise FileProcessingError(f"Failed to read text file: {str(e)}")
 
 
-def truncate_text(text: str, max_length: int = 10000) -> str:
+def truncate_text(text: str, max_length: int = 500) -> str:
     """
     テキストを指定された長さに切り詰める
 
     OpenAI APIに送信する際のトークン数を制限するために使用します。
+    ドキュメント種別の判別には先頭部分で十分なため、先頭のみを取得します。
 
     Args:
         text (str): 元のテキスト
-        max_length (int): 最大文字数。デフォルト10000文字
+        max_length (int): 最大文字数。デフォルト500文字
 
     Returns:
         str: 切り詰められたテキスト
@@ -254,12 +255,7 @@ def truncate_text(text: str, max_length: int = 10000) -> str:
 
     logger.info(f"Truncating text from {len(text)} to {max_length} characters")
 
-    # 先頭と末尾を取得して、中間部分を省略
-    half_length = max_length // 2
-    truncated = (
-        text[:half_length] +
-        "\n\n... [中間部分省略] ...\n\n" +
-        text[-half_length:]
-    )
+    # 先頭部分のみ取得（ドキュメント種別判別には先頭で十分）
+    truncated = text[:max_length] + "\n\n... [以降省略]"
 
     return truncated

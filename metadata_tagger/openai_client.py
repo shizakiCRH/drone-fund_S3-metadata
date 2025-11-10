@@ -32,7 +32,7 @@ def extract_metadata_with_ai(
     api_key: str,
     file_path: str,
     file_content: str,
-    model: str = "gpt-5-mini"
+    model: str = "gpt-5"
 ) -> Tuple[Optional[str], Optional[int]]:
     """
     OpenAI APIを使用してファイルからメタデータを抽出する
@@ -41,7 +41,7 @@ def extract_metadata_with_ai(
         api_key (str): OpenAI APIキー
         file_path (str): ファイルのS3キー（パス）
         file_content (str): ファイルから抽出されたテキスト内容
-        model (str): 使用するOpenAIモデル。デフォルトは "gpt-5-mini"
+        model (str): 使用するOpenAIモデル。デフォルトは "gpt-5"
 
     Returns:
         Tuple[Optional[str], Optional[int]]: (doc_type, doc_date)
@@ -77,10 +77,7 @@ def extract_metadata_with_ai(
                     "role": "user",
                     "content": prompt
                 }
-            ],
-            temperature=0.3,  # 一貫性のある結果を得るために低めに設定
-            max_tokens=150,   # 短い応答で十分
-            response_format={"type": "json_object"}  # JSON形式を強制
+            ]
         )
 
         # 応答からテキストを取得

@@ -37,6 +37,7 @@ import os
 import json
 import logging
 import boto3
+from datetime import datetime
 from typing import Dict, Any, Tuple
 
 # 自作モジュールのインポート
@@ -63,7 +64,7 @@ s3_client = boto3.client('s3')
 
 # 環境変数から設定を取得
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
-OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5-mini')  # デフォルトはgpt-5-mini
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5')  # デフォルトはgpt-5
 SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL', '')
 MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 10 * 1024 * 1024))  # デフォルト10MB
 
@@ -110,8 +111,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         # 3. ファイルからテキストを抽出
         text_content = extract_text_from_file(file_key, file_content, MAX_FILE_SIZE)
 
-        # テキストを適切な長さに切り詰める
-        text_content = truncate_text(text_content, max_length=10000)
+        # テキストを適切な長さに切り詰める（ドキュメント種別判別には先頭500文字で十分）
+        text_content = truncate_text(text_content, max_length=500)
 
         # 4. OpenAI APIでメタデータを抽出
         doc_type, doc_date = extract_metadata_with_ai(
@@ -132,6 +133,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         # 7. S3に書き戻し
         write_metadata_json(bucket_name, metadata_key, metadata)
+
+        # 8. ログファイルに記録を追記
+        append_to_log_file(bucket_name, file_key, doc_type, doc_date)
 
         logger.info(f"Successfully processed {file_key}: doc_type={doc_type}, doc_date={doc_date}")
 
@@ -250,6 +254,8 @@ def get_metadata_json(bucket_name: str, metadata_key: str) -> Dict:
         return metadata
 
     except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in metadata.json: {metadata_key}")
+        logger.error(f"JSON content: {content}")
         raise FileProcessingError(f"Invalid JSON in metadata.json: {str(e)}")
 
     except Exception as e:
@@ -336,6 +342,67 @@ def write_metadata_json(bucket_name: str, metadata_key: str, metadata: Dict) -> 
         raise FileProcessingError(f"Failed to write metadata.json to S3: {str(e)}")
 
 
+def append_to_log_file(bucket_name: str, file_key: str, doc_type: str, doc_date: int) -> None:
+    """
+    処理成功時にログファイルに記録を追記する
+
+    Args:
+        bucket_name (str): S3バケット名
+        file_key (str): 処理したファイルのキー（例: "会社A/カテゴリ1/document.pdf"）
+        doc_type (str): ドキュメント種別
+        doc_date (int): ドキュメント日付（YYYYMMDD形式）
+    """
+
+    try:
+        # ログファイルのキー
+        log_key = "metadata.txt"
+
+        # 処理日時（JST）
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # ファイルの１つ上のディレクトリ名とファイル名を抽出
+        parts = file_key.split('/')
+        if len(parts) >= 2:
+            parent_directory = parts[-2]  # １つ上のディレクトリ名
+            file_name = parts[-1]  # ファイル名
+        elif len(parts) == 1:
+            parent_directory = ""  # ディレクトリなし
+            file_name = parts[0]
+        else:
+            parent_directory = ""
+            file_name = ""
+
+        # doc_dateがNoneの場合は空文字列
+        doc_date_str = str(doc_date) if doc_date is not None else ""
+
+        # タブ区切りのログ行を作成
+        log_line = f"{timestamp}\t{parent_directory}\t{file_name}\t{doc_type}\t{doc_date_str}\n"
+
+        # 既存のログファイルを取得（存在しない場合は空文字列）
+        try:
+            response = s3_client.get_object(Bucket=bucket_name, Key=log_key)
+            existing_content = response['Body'].read().decode('utf-8')
+        except s3_client.exceptions.NoSuchKey:
+            # ログファイルが存在しない場合はヘッダーを作成
+            existing_content = "処理日時\t親ディレクトリ\tファイル名\tdoc_type\tdoc_date\n"
+            logger.info(f"Log file does not exist, creating new one: {log_key}")
+
+        # ログ行を追記
+        new_content = existing_content + log_line
+
+        # S3に書き込み
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=log_key,
+            Body=new_content.encode('utf-8'),
+            ContentType='text/plain; charset=utf-8'
+        )
+
+        logger.info(f"Successfully appended log to {log_key}: {log_line.strip()}")
+
+    except Exception as e:
+        # ログ記録失敗はエラーとしてログに出力するが、処理は継続
+        logger.error(f"Failed to append to log file: {str(e)}", exc_info=True)
 
 
 def handle_error(file_key: str, error_type: str, message: str) -> Dict[str, Any]:

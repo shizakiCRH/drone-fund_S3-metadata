@@ -203,16 +203,17 @@ def extract_text(key, content):
 **APIパラメータ**:
 ```python
 response = openai.ChatCompletion.create(
-    model="gpt-4o-mini",
+    model="gpt-5",
     messages=[
         {"role": "system", "content": "You are a document analysis expert. Always respond with valid JSON."},
         {"role": "user", "content": prompt}
-    ],
-    temperature=0.3,
-    max_tokens=150,
-    response_format={"type": "json_object"}
+    ]
 )
 ```
+
+**注意**:
+- `max_completion_tokens` は指定しない（無制限）
+- プロンプトでJSON形式を明示的に要求
 
 #### 4.4.4 metadata.json の更新
 
