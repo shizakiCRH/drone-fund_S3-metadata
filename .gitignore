@@ -1,0 +1,38 @@
+# Python
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+.Python
+venv/
+env/
+ENV/
+
+# Lambda deployment packages
+*.zip
+
+# Lambda Layer build artifacts
+layer/build/
+layer/python-dependencies.zip
+
+# Function deployment packages
+file_scanner/function.zip
+metadata_tagger/function.zip
+
+# macOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.log
+
+# Environment variables (if used locally)
+.env
+.env.local

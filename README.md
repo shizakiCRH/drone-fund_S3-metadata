@@ -61,9 +61,8 @@ Slack通知
 - 取得方法: https://api.slack.com/messaging/webhooks
 
 ### 4. ローカル環境（Lambda Layerビルド用）
-- Python 3.11以上
-- pip
-- zip コマンド
+- Docker
+- インストール方法: https://docs.docker.com/get-docker/
 
 ---
 
@@ -83,7 +82,7 @@ project/
 ├── stepfunctions/
 │   └── state_machine.json          # Step Functions ASL定義
 ├── layer/
-│   └── build_layer.sh              # Lambda Layerビルドスクリプト
+│   └── build_layer_docker.sh       # Lambda Layerビルドスクリプト（Docker版）
 └── README.md                       # このファイル
 ```
 
@@ -175,31 +174,55 @@ project/
 
 ### ステップ2: Lambda Layerの作成
 
-#### 2-1. ローカル環境でビルド
+#### 2-1. ローカル環境でビルド（Docker使用）
+
+**重要**: Lambda環境との互換性のため、**Dockerを使用したビルドが必須**です。
 
 ```bash
 cd layer
-bash build_layer.sh
+bash build_layer_docker.sh
 ```
 
-出力: `python-dependencies.zip` が生成されます
+出力: `python-dependencies.zip` が生成されます（サイズ: 約50-55MB）
 
-#### 2-2. AWS Consoleでレイヤーを作成
+**注意**:
+- macOS/WindowsでDockerを使わずにビルドすると、バイナリ互換性の問題でLambdaで動作しません
+- ビルドされたzipファイルは50MBを超えるため、S3経由でアップロードする必要があります
 
-1. **Lambda** → **レイヤー** → **レイヤーを作成**
-2. 名前: `python-dependencies`
-3. zipファイルをアップロード: `python-dependencies.zip`
-4. 互換性のあるランタイム: **Python 3.11**
-5. **作成**
+#### 2-2. S3にアップロード
 
-または、AWS CLIで:
+Lambda Layerのzipファイルは50MBを超えるため、AWS Consoleから直接アップロードできません。
+以下の手順でS3経由でアップロードしてください。
+
+**方法A: AWS CLI（推奨）**
 
 ```bash
+# 1. S3にアップロード（バケット名を実際のものに置き換えてください）
+aws s3 cp layer/python-dependencies.zip s3://your-bucket-name/lambda-layers/python-dependencies.zip
+
+# 2. S3からLambda Layerを作成
 aws lambda publish-layer-version \
   --layer-name python-dependencies \
-  --zip-file fileb://python-dependencies.zip \
-  --compatible-runtimes python3.11
+  --content S3Bucket=your-bucket-name,S3Key=lambda-layers/python-dependencies.zip \
+  --compatible-runtimes python3.12
 ```
+
+**方法B: AWS Console（手動）**
+
+1. **S3 Console** を開く
+2. 適切なバケットを選択（または新規作成）
+3. 「アップロード」をクリック
+4. `layer/python-dependencies.zip` を選択してアップロード
+5. アップロード先のパス（例: `lambda-layers/python-dependencies.zip`）をメモ
+
+次に、Lambda Layerを作成:
+
+1. **Lambda Console** → **レイヤー** → **レイヤーを作成**
+2. 名前: `python-dependencies`
+3. 「Amazon S3 からファイルをアップロード」を選択
+4. S3 リンク URL を入力: `s3://your-bucket-name/lambda-layers/python-dependencies.zip`
+5. 互換性のあるランタイム: **Python 3.12** を選択
+6. **作成**
 
 ---
 
@@ -208,7 +231,7 @@ aws lambda publish-layer-version \
 1. **Lambda** → **関数** → **関数の作成**
 2. **一から作成**
 3. 関数名: `FileScanner`
-4. ランタイム: **Python 3.11**
+4. ランタイム: **Python 3.12**
 5. 既存のロールを使用: `S3MetadataLambdaRole`
 6. **関数の作成**
 
@@ -229,7 +252,7 @@ aws lambda publish-layer-version \
 1. **Lambda** → **関数** → **関数の作成**
 2. **一から作成**
 3. 関数名: `MetadataTagger`
-4. ランタイム: **Python 3.11**
+4. ランタイム: **Python 3.12**
 5. 既存のロールを使用: `S3MetadataLambdaRole`
 6. **関数の作成**
 
@@ -396,15 +419,18 @@ aws lambda update-function-code \
 依存パッケージ（pymupdf, openpyxl, openai, requests）を更新する場合:
 
 ```bash
-# layer ディレクトリで実行
+# 1. layer ディレクトリでビルド（Docker使用）
 cd layer
-bash build_layer.sh
+bash build_layer_docker.sh
 
-# 新しいバージョンのレイヤーを作成
+# 2. S3にアップロード
+aws s3 cp python-dependencies.zip s3://your-bucket-name/lambda-layers/python-dependencies.zip
+
+# 3. 新しいバージョンのレイヤーを作成
 aws lambda publish-layer-version \
   --layer-name python-dependencies \
-  --zip-file fileb://python-dependencies.zip \
-  --compatible-runtimes python3.11
+  --content S3Bucket=your-bucket-name,S3Key=lambda-layers/python-dependencies.zip \
+  --compatible-runtimes python3.12
 ```
 
 レイヤーのバージョンが更新されたら、Lambda関数に新しいバージョンを割り当て:

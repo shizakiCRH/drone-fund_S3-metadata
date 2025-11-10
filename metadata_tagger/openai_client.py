@@ -93,9 +93,9 @@ def extract_metadata_with_ai(
         doc_type = result.get('doc_type')
         doc_date = result.get('doc_date')
 
-        # doc_typeが"unknown"の場合はNoneに変換
-        if doc_type == "unknown":
-            doc_type = None
+        # doc_typeが空の場合は"その他"に設定
+        if not doc_type or doc_type.strip() == "":
+            doc_type = "その他"
 
         # doc_dateの型チェックと変換
         if doc_date is not None:
@@ -140,28 +140,62 @@ def build_prompt(file_path: str, file_content: str) -> str:
 
 以下の情報を抽出してください:
 
-1. doc_type: ドキュメントの種別
-   - 例: 投資、契約書、議事録、報告書、財務諸表、プレゼン資料、など
-   - ファイルパスや内容から適切な種別を判断してください
-   - 種別が特定できない場合は "unknown" を返してください
+1. doc_type: ドキュメントのカテゴリ
+   以下のカテゴリから最も適切なものを選択してください:
+
+   - 会社情報: 株主名簿、shareholders register、定款、articles of incorporation、履歴事項、登記簿、registry、謄本、certified copy、規程
+   - 営業資料: 営業資料、sales deck、会社案内、company profile、事業紹介、business overview
+   - 財務諸表: 決算、financial statements、試算表、trial balance、貸借対照表、balance sheet、損益計算書、profit and loss、P&L、PL、BS、キャッシュフロー、cash flow、FS、TB、税務申告、勘定科目内訳書
+   - 株主総会: 株主総会、shareholders meeting、AGM、EGM、種類総会、招集通知、議案、議決、議事録
+   - 取締役会: 取締役会、board pack、board minutes、経営会議、executive meeting、議案、議事録
+   - 報告資料: 月次、monthly、KPI、report、dashboard、事業報告、株主報告会、株主説明会、定例
+   - 事業計画: 事業計画、business plan、利益計画、profit plan、売上計画、sales plan、収支計画、budget、全社戦略、corporate strategy、中期計画、mid term
+   - 投資: 投資計画、investment plan、投資委員会、investment committee、募集株式、share issuance、term sheet、shareholder agreement、lock up、round、series、株主間契約、投資契約、株式、株主分配
+   - 資本政策: 資本政策、equity strategy、capital policy、エクイティ
+   - その他: 上記のいずれにも該当しない場合
+
+   ※ファイルパスや内容から最も適切なカテゴリを判断してください
 
 2. doc_date: ドキュメントの日付（YYYYMMDD形式の数値）
-   - ファイル名またはパス内の日付を優先的に使用してください
-   - 例: "2025年4月17日" → 20250417
-   - 例: "2025/04/17" → 20250417
-   - 例: "20250417" → 20250417
-   - ファイル内容から日付を推測する場合は、最も重要と思われる日付を選択してください
-   - 日付が特定できない場合は null を返してください
+   - 以下の優先順位で日付を探してください:
+     1. ファイル名に含まれる日付
+     2. ファイルパスの1つ上のディレクトリ名に含まれる日付（例: "2025年4月/"、"2025/04/"、"202504"）
+     3. ファイル内容に含まれる最も重要と思われる日付
 
-返答は以下のJSON形式でお願いします:
+   - 日付の形式例:
+     - "2025年4月17日" → 20250417
+     - "2025/04/17" → 20250417
+     - "20250417" → 20250417
+     - "2025-04-17" → 20250417
+     - "2025年4月" → 20250401（日が不明な場合は01日とする）
+     - "202504" → 20250401（YYYYMM形式の場合は01日とする）
+
+   - 四半期表記の除外:
+     - "2025-2Q", "FY2024 Q3", "2025Q1" などの四半期表記は日付として採用しない
+     - これらは無視してください
+
+   - 妥当性検証:
+     - 2000年〜2099年の範囲内の日付のみ採用
+     - 存在しない日付（例: 20250230、20251332）は採用しない
+     - 検証に失敗した場合は null を返す
+
+   - **重要**: 日付に関する明確な文字列が見つからない場合は、無理に日付を推測せず null を返してください
+
+返答は以下のJSON形式でお願いします（例1: 日付が見つかった場合）:
 {{
-  "doc_type": "種別名",
+  "doc_type": "会社情報",
   "doc_date": 20250417
 }}
 
+返答例2（日付が見つからない場合）:
+{{
+  "doc_type": "財務諸表",
+  "doc_date": null
+}}
+
 注意事項:
-- doc_dateは必ず数値型（YYYYMMDD形式）で返してください
-- 日付が特定できない場合のみ null を使用してください
+- doc_typeは上記のカテゴリ名（日本語）をそのまま使用してください
+- doc_dateは数値型（YYYYMMDD形式）で返すか、見つからない場合は null（文字列ではなくJSONのnull値）を返してください
 - 必ずJSONのみを返し、説明文は含めないでください
 """
 
@@ -193,7 +227,7 @@ def parse_ai_response(response_text: str) -> Dict:
         # 必要なキーが存在するかチェック
         if 'doc_type' not in result:
             logger.warning("doc_type not found in AI response, using default")
-            result['doc_type'] = "unknown"
+            result['doc_type'] = "その他"
 
         if 'doc_date' not in result:
             logger.warning("doc_date not found in AI response, using default")
@@ -216,14 +250,14 @@ def validate_metadata(doc_type: Optional[str], doc_date: Optional[int]) -> Tuple
 
     Returns:
         Tuple[str, Optional[int]]: 検証済みの (doc_type, doc_date)
-            - doc_typeは必ず文字列を返す（Noneの場合は"unknown"）
+            - doc_typeは必ず文字列を返す（Noneの場合は"その他"）
             - doc_dateはそのまま返す（Noneの可能性あり）
     """
 
     # doc_typeの検証
     if not doc_type or doc_type.strip() == "":
-        logger.info("doc_type is empty, using 'unknown'")
-        doc_type = "unknown"
+        logger.info("doc_type is empty, using 'その他'")
+        doc_type = "その他"
 
     # doc_dateの検証（YYYYMMDD形式かチェック）
     if doc_date is not None:

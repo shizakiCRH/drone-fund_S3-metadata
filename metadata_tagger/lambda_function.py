@@ -353,17 +353,16 @@ def handle_error(file_key: str, error_type: str, message: str) -> Dict[str, Any]
 
     logger.error(f"Error processing {file_key}: {error_type} - {message}")
 
-    # Slack通知を送信（metadata_not_found以外）
-    if error_type != "metadata_not_found":
-        try:
-            send_error_notification(
-                webhook_url=SLACK_WEBHOOK_URL,
-                error_type=error_type,
-                file_key=file_key,
-                message=message
-            )
-        except Exception as e:
-            logger.error(f"Failed to send Slack notification: {str(e)}")
+    # Slack通知を送信（すべてのエラー）
+    try:
+        send_error_notification(
+            webhook_url=SLACK_WEBHOOK_URL,
+            error_type=error_type,
+            file_key=file_key,
+            message=message
+        )
+    except Exception as e:
+        logger.error(f"Failed to send Slack notification: {str(e)}")
 
     # エラーレスポンスを返す
     return build_error_response(file_key, error_type, message)
