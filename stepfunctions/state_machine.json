@@ -1,11 +1,15 @@
 {
-  "Comment": "S3ファイルメタデータ自動タグ付けシステム",
+  "Comment": "S3ファイルメタデータ自動タグ付けシステム - バケット名はScanFilesのParametersで指定",
   "StartAt": "ScanFiles",
   "States": {
     "ScanFiles": {
       "Type": "Task",
       "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:FileScanner",
       "Comment": "S3バケット内の全ファイルをスキャンし、.metadata.jsonを除くファイルリストを取得",
+      "Parameters": {
+        "bucket": "YOUR_BUCKET_NAME"
+      },
+      "ResultPath": "$.scanResult",
       "Retry": [
         {
           "ErrorEquals": [
@@ -26,6 +30,15 @@
           "Next": "ScanFailure"
         }
       ],
+      "Next": "PrepareFilesForProcessing"
+    },
+    "PrepareFilesForProcessing": {
+      "Type": "Pass",
+      "Comment": "各ファイルにバケット名を追加して、ProcessFilesに渡す形式を整える",
+      "Parameters": {
+        "bucket": "YOUR_BUCKET_NAME",
+        "files.$": "$.scanResult.files"
+      },
       "Next": "ProcessFiles"
     },
     "ProcessFiles": {
@@ -33,6 +46,10 @@
       "ItemsPath": "$.files",
       "MaxConcurrency": 1,
       "Comment": "各ファイルを順次処理（並列度1で順次実行）",
+      "Parameters": {
+        "key.$": "$$.Map.Item.Value",
+        "bucket.$": "$.bucket"
+      },
       "Iterator": {
         "StartAt": "TagMetadata",
         "States": {

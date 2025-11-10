@@ -360,6 +360,9 @@ def append_to_log_file(bucket_name: str, file_key: str, doc_type: str, doc_date:
         # 処理日時（JST）
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # フルパス（ファイルキー）
+        full_path = file_key
+
         # ファイルの１つ上のディレクトリ名とファイル名を抽出
         parts = file_key.split('/')
         if len(parts) >= 2:
@@ -376,7 +379,7 @@ def append_to_log_file(bucket_name: str, file_key: str, doc_type: str, doc_date:
         doc_date_str = str(doc_date) if doc_date is not None else ""
 
         # タブ区切りのログ行を作成
-        log_line = f"{timestamp}\t{parent_directory}\t{file_name}\t{doc_type}\t{doc_date_str}\n"
+        log_line = f"{timestamp}\t{full_path}\t{parent_directory}\t{file_name}\t{doc_type}\t{doc_date_str}\n"
 
         # 既存のログファイルを取得（存在しない場合は空文字列）
         try:
@@ -384,7 +387,7 @@ def append_to_log_file(bucket_name: str, file_key: str, doc_type: str, doc_date:
             existing_content = response['Body'].read().decode('utf-8')
         except s3_client.exceptions.NoSuchKey:
             # ログファイルが存在しない場合はヘッダーを作成
-            existing_content = "処理日時\t親ディレクトリ\tファイル名\tdoc_type\tdoc_date\n"
+            existing_content = "処理日時\tフルパス\t親ディレクトリ\tファイル名\tdoc_type\tdoc_date\n"
             logger.info(f"Log file does not exist, creating new one: {log_key}")
 
         # ログ行を追記

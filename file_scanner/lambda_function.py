@@ -18,8 +18,8 @@ S3バケット全体を再帰的にスキャンし、.metadata.jsonを除く全�
 出力:
 {
     "files": [
-        {"key": "会社A/document1.pdf", "bucket": "your-bucket-name"},
-        {"key": "会社B/report.xlsx", "bucket": "your-bucket-name"}
+        "会社A/document1.pdf",
+        "会社B/report.xlsx"
     ]
 }
 """
@@ -50,7 +50,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         Dict[str, Any]: ファイルリストを含む辞書
             {
                 "files": [
-                    {"key": "path/to/file.pdf", "bucket": "bucket-name"},
+                    "path/to/file.pdf",
+                    "path/to/file2.xlsx",
                     ...
                 ]
             }
@@ -86,7 +87,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         raise
 
 
-def scan_s3_bucket(bucket_name: str, prefix: str = '') -> List[Dict[str, str]]:
+def scan_s3_bucket(bucket_name: str, prefix: str = '') -> List[str]:
     """
     S3バケットを再帰的にスキャンし、.metadata.jsonを除く全ファイルのリストを返す
 
@@ -99,9 +100,10 @@ def scan_s3_bucket(bucket_name: str, prefix: str = '') -> List[Dict[str, str]]:
         prefix (str): スキャン対象のプレフィックス
 
     Returns:
-        List[Dict[str, str]]: ファイル情報のリスト
+        List[str]: ファイルキーのリスト
             [
-                {"key": "path/to/file.pdf", "bucket": "bucket-name"},
+                "path/to/file.pdf",
+                "path/to/file2.xlsx",
                 ...
             ]
     """
@@ -133,10 +135,7 @@ def scan_s3_bucket(bucket_name: str, prefix: str = '') -> List[Dict[str, str]]:
                     # .metadata.jsonファイルを除外
                     # ディレクトリ（/で終わるキー）も除外
                     if not key.endswith('.metadata.json') and not key.endswith('/'):
-                        files.append({
-                            'key': key,
-                            'bucket': bucket_name
-                        })
+                        files.append(key)
 
                         # デバッグ用: 最初の10ファイルのみログ出力
                         if len(files) <= 10:

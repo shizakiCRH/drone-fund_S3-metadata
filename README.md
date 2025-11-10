@@ -2,6 +2,11 @@
 
 S3バケットに配置されたファイル（PDF、Excel、テキスト等）を自動スキャンし、OpenAI GPT-5-miniを用いてドキュメント種別（doc_type）と日付（doc_date）を抽出し、既存のmetadata.jsonファイルに追記するシステムです。
 
+**主な特徴**:
+- Token最適化: PDFは1ページ、Excelは15行、テキストは500文字のみ送信してコスト削減
+- 処理ログ記録: 成功したファイルの処理結果を`metadata.txt`にタブ区切りで自動記録
+- エラー通知: 処理失敗時にSlackへ自動通知
+
 ## 📋 目次
 
 - [システム概要](#システム概要)
@@ -30,7 +35,7 @@ S3バケットに配置されたファイル（PDF、Excel、テキスト等）�
     ↓
 [Lambda 2: MetadataTagger] → 各ファイルをAI解析
     ↓ (成功)
-metadata.jsonに追記
+metadata.jsonに追記 + metadata.txtログファイルに記録
     ↓ (エラー)
 Slack通知
 ```
@@ -43,6 +48,7 @@ Slack通知
 | **MetadataTagger** (Lambda) | 各ファイルをAIで解釈し、メタデータを更新 |
 | **Step Functions** | 処理全体のオーケストレーション |
 | **OpenAI API (GPT-5-mini)** | ファイル内容の解釈とタグ抽出 |
+| **S3 ログファイル** (metadata.txt) | 処理成功ログをタブ区切りで記録 |
 | **Slack API** | エラー通知 |
 
 ---
@@ -299,11 +305,29 @@ zip -r function.zip .
 3. タイプ: **標準**
 4. `stepfunctions/state_machine.json` の内容を貼り付け
 5. **以下の箇所を実際の値に置き換え**:
+   - `YOUR_BUCKET_NAME`: 処理対象のS3バケット名（2箇所あります）
    - `REGION`: AWSリージョン（例: `ap-northeast-1`）
    - `ACCOUNT_ID`: AWSアカウントID（例: `123456789012`）
 
+**置き換え箇所の例:**
+
 ```json
-"Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:FileScanner"
+"ScanFiles": {
+  "Type": "Task",
+  "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:FileScanner",
+  "Parameters": {
+    "bucket": "YOUR_BUCKET_NAME"  ← ここを実際のバケット名に変更
+  },
+  ...
+},
+"PrepareFilesForProcessing": {
+  "Type": "Pass",
+  "Parameters": {
+    "bucket": "YOUR_BUCKET_NAME",  ← ここも実際のバケット名に変更
+    "files.$": "$.scanResult.files"
+  },
+  ...
+}
 ```
 
 Lambda関数ARNの確認方法:
@@ -317,20 +341,17 @@ Lambda関数ARNの確認方法:
 
 ## 実行方法
 
-### AWS Consoleから実行
+**注意**: バケット名はステートマシン定義に直接記載されているため、実行時に指定する必要はありません。
+
+### AWS Consoleから実行（全ファイル処理）
 
 1. **Step Functions** → `S3MetadataTaggingStateMachine` を開く
 2. **実行の開始** をクリック
-3. 入力JSONを指定:
+3. 入力JSONは空のオブジェクトで問題ありません:
 
 ```json
-{
-  "bucket": "your-bucket-name",
-  "prefix": ""
-}
+{}
 ```
-
-**※ `your-bucket-name` を実際のバケット名に置き換えてください**
 
 4. **実行の開始**
 5. 実行状態を確認
@@ -340,17 +361,17 @@ Lambda関数ARNの確認方法:
 ```bash
 aws stepfunctions start-execution \
   --state-machine-arn arn:aws:states:REGION:ACCOUNT_ID:stateMachine:S3MetadataTaggingStateMachine \
-  --input '{"bucket":"your-bucket-name","prefix":""}'
+  --input '{}'
 ```
 
-### 特定のプレフィックス配下のみ処理
+### 処理対象バケットの変更
 
-```json
-{
-  "bucket": "your-bucket-name",
-  "prefix": "会社A/"
-}
-```
+バケット名を変更する場合は、ステートマシン定義を更新してください:
+
+1. **Step Functions** → `S3MetadataTaggingStateMachine` を開く
+2. **編集**をクリック
+3. `ScanFiles` ステートと `PrepareFilesForProcessing` ステートの `YOUR_BUCKET_NAME` を変更
+4. **保存**
 
 ---
 
@@ -447,7 +468,8 @@ aws lambda publish-layer-version \
 3. **ワークフロースタジオ**または**コードエディタ**で修正
    - コードエディタを選択すると、JSON定義を直接編集できます
 4. `stepfunctions/state_machine.json` の更新内容を貼り付け
-5. **保存**
+5. **`YOUR_BUCKET_NAME`、`REGION`、`ACCOUNT_ID` を実際の値に置き換えることを忘れずに**
+6. **保存**
 
 または、AWS CLIで:
 
@@ -456,6 +478,9 @@ aws lambda publish-layer-version \
 STATE_MACHINE_ARN=$(aws stepfunctions list-state-machines \
   --query "stateMachines[?name=='S3MetadataTaggingStateMachine'].stateMachineArn" \
   --output text)
+
+# 注意: state_machine.json内の YOUR_BUCKET_NAME, REGION, ACCOUNT_ID を
+# 実際の値に置き換えてから実行してください
 
 # 定義を更新
 aws stepfunctions update-state-machine \
@@ -512,6 +537,32 @@ aws lambda update-function-configuration \
 - `/aws/lambda/FileScanner`
 - `/aws/lambda/MetadataTagger`
 - `/aws/states/S3MetadataTaggingStateMachine`
+
+### S3 ログファイル
+
+正常に処理されたファイルの記録は、S3バケットのルートにある `metadata.txt` に自動的に追記されます。
+
+**ファイル形式**: タブ区切り（TSV）
+
+**フィールド**:
+- 処理日時（YYYY-MM-DD HH:MM:SS形式）
+- フルパス（S3キー）
+- 親ディレクトリ（ファイルの1つ上のディレクトリ名）
+- ファイル名
+- doc_type（抽出されたドキュメント種別）
+- doc_date（抽出されたドキュメント日付、YYYYMMDD形式）
+
+**例**:
+```
+処理日時	フルパス	親ディレクトリ	ファイル名	doc_type	doc_date
+2025-01-09 14:23:45	会社A/投資契約書.pdf	会社A	投資契約書.pdf	投資	20250115
+2025-01-09 14:24:12	会社B/レポート.xlsx	会社B	レポート.xlsx	報告	20241225
+```
+
+**確認方法**:
+1. **S3** → 対象バケットを開く
+2. `metadata.txt` をダウンロード
+3. Excel等のスプレッドシートアプリで開く（タブ区切りとして認識されます）
 
 ### エラー通知
 
