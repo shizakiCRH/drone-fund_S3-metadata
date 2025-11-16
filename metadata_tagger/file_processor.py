@@ -106,8 +106,8 @@ def extract_pdf_text(content: bytes) -> str:
 
         logger.info(f"PDF has {total_pages} pages")
 
-        # 各ページからテキストを抽出（最大1ページのみ - ドキュメント種別判別に十分）
-        max_pages = min(total_pages, 1)
+        # 各ページからテキストを抽出（最大3ページまで）
+        max_pages = min(total_pages, 3)
         for page_num in range(max_pages):
             page = pdf_document[page_num]
             text = page.get_text()
