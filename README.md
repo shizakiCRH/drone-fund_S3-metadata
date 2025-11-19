@@ -323,6 +323,25 @@ Lambda関数ARNの確認方法:
 7. 既存のロールを選択: `StepFunctionsExecutionRole`
 8. **ステートマシンの作成**
 
+#### ステートマシンのページネーション処理について
+
+ステートマシンは以下のフローでページネーション（ループ処理）を実現しています:
+
+1. **ScanBatch**: FileScannerが100件ずつファイルをスキャン
+   - 出力: `files`（ファイルリスト）、`continuation_token`（次のページのトークン）、`is_truncated`（続きがあるか）
+
+2. **ProcessBatch**: 100件のファイルを並列処理（並列度3）
+
+3. **CheckMoreFiles**: `is_truncated`をチェック
+   - `is_truncated = true` の場合: `continuation_token`を使って次の100件をスキャン（ScanBatchへループ）
+   - `is_truncated = false` の場合: 全ファイル処理完了
+
+**is_truncatedの意味**:
+- `true`: まだ処理すべきファイルが残っている（次のページがある）
+- `false`: 全てのファイルをスキャン済み（処理完了）
+
+この仕組みにより、万単位のファイルでもStep Functionsの実行履歴制限（25,000イベント）を超えずに処理できます。
+
 ---
 
 ## 実行方法
@@ -377,27 +396,24 @@ MetadataTagger は処理結果をCloudWatch Logsに構造化ログとして出�
 #### 1. CloudWatch Logs Insights を開く
 
 1. AWS Management Console → **CloudWatch** を開く
-2. 左メニューから **Logs Insights** を選択
-3. ロググループで `/aws/lambda/MetadataTagger` を選択
+2. 左メニューから **ログ ＞ ログのインサイト** を選択
+3. 「ロググループ名」で `/aws/lambda/MetadataTagger` を指定
 4. 時間範囲を設定（Step Functions の実行時間をカバーする範囲）
 
 #### 2. クエリを実行
 
-以下のクエリをコピー&ペーストして **「クエリを実行」** をクリック:
+以下のクエリをコピー&ペーストして **「クエリの実行」** をクリック:
 
 ```
-fields 
-    strcontains(@message, "metadata_updated") as is_metadata,
-    @timestamp as timestamp
-| filter is_metadata = 1
-| parse @message '"timestamp": "(?<処理日時>[^"]+)"'
-| parse @message '"file_key": "(?<フルパス>[^"]+)"'
-| parse @message '"parent_directory": "(?<親ディレクトリ>[^"]*)"'
-| parse @message '"file_name": "(?<ファイル名>[^"]+)"'
-| parse @message '"doc_type": "(?<doc_type>[^"]+)"'
-| parse @message '"doc_date": (?<doc_date>\d+|null)'
-| fields 処理日時, フルパス, 親ディレクトリ, ファイル名, doc_type, doc_date
-| sort timestamp asc
+fields @timestamp, @message
+| filter @message like "metadata_updated"
+| parse @message '"file_key": "*"' as filepath
+| parse @message '"parent_directory": "*"' as parent_dir
+| parse @message '"file_name": "*"' as filename
+| parse @message '"doc_type": "*"' as doctype
+| parse @message '"doc_date": *}' as docdate
+| display @timestamp, filepath, parent_dir, filename, doctype, docdate
+| sort @timestamp asc
 ```
 
 #### 3. CSV形式でエクスポート

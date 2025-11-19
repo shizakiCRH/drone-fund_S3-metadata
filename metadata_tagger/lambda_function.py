@@ -312,7 +312,19 @@ def get_metadata_json(bucket_name: str, metadata_key: str) -> Dict:
 
     try:
         response = s3_client.get_object(Bucket=bucket_name, Key=metadata_key)
-        content = response['Body'].read().decode('utf-8')
+        content_bytes = response['Body'].read()
+
+        # エンコーディングを自動検出してデコード
+        try:
+            content = content_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            logger.info("UTF-8 decoding failed for metadata.json, trying Shift_JIS")
+            try:
+                content = content_bytes.decode('shift_jis')
+            except UnicodeDecodeError:
+                logger.info("Shift_JIS decoding failed for metadata.json, trying CP932")
+                content = content_bytes.decode('cp932', errors='replace')
+
         metadata = json.loads(content)
 
         logger.info(f"Successfully loaded metadata.json: {metadata_key}")
@@ -321,7 +333,7 @@ def get_metadata_json(bucket_name: str, metadata_key: str) -> Dict:
 
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in metadata.json: {metadata_key}")
-        logger.error(f"JSON content: {content}")
+        logger.error(f"JSON content: {content[:500]}...")
         raise FileProcessingError(f"Invalid JSON in metadata.json: {str(e)}")
 
     except Exception as e:
