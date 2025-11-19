@@ -1,11 +1,13 @@
 # S3ファイルメタデータ自動タグ付けシステム
 
-S3バケットに配置されたファイル（PDF、Excel、テキスト等）を自動スキャンし、OpenAI GPT-5-miniを用いてドキュメント種別（doc_type）と日付（doc_date）を抽出し、既存のmetadata.jsonファイルに追記するシステムです。
+S3バケットに配置されたファイル（PDF、Excel、テキスト等）を自動スキャンし、OpenAI GPTモデルを用いてドキュメント種別（doc_type）と日付（doc_date）を抽出し、既存のmetadata.jsonファイルに追記するシステムです。
 
 **主な特徴**:
-- Token最適化: PDFは1ページ、Excelは15行、テキストは500文字のみ送信してコスト削減
-- 処理ログ記録: 成功したファイルの処理結果を`metadata.txt`にタブ区切りで自動記録
-- エラー通知: 処理失敗時にSlackへ自動通知
+- **ページネーション処理**: 100件ずつバッチ処理で万単位のファイルにも対応
+- **並列処理**: 並列度3で処理速度を最適化（設定変更可能）
+- **Token最適化**: PDFは1ページ、Excelは15行、テキストは500文字のみ送信してコスト削減
+- **処理ログ記録**: CloudWatch Logsに構造化ログとして記録、後からCSVエクスポート可能
+- **エラー通知**: 処理失敗時にSlackへ自動通知、429エラーは自動リトライ
 
 ## 📋 目次
 
@@ -14,6 +16,7 @@ S3バケットに配置されたファイル（PDF、Excel、テキスト等）�
 - [ファイル構成](#ファイル構成)
 - [デプロイ手順](#デプロイ手順)
 - [実行方法](#実行方法)
+- [ログの集約方法](#ログの集約方法)
 - [更新デプロイ手順](#更新デプロイ手順)
 - [監視とログ](#監視とログ)
 - [トラブルシューティング](#トラブルシューティング)
@@ -27,28 +30,32 @@ S3バケットに配置されたファイル（PDF、Excel、テキスト等）�
 ```
 [手動実行]
     ↓
-[Step Functions]
+[Step Functions] ← ページネーションループ
     ↓
-[Lambda 1: FileScanner] → S3バケット全体をスキャン
+[Lambda 1: FileScanner] → S3バケットから100件ずつスキャン
     ↓
-[Map State (順次実行)]
+[Map State (並列度3)]
     ↓
-[Lambda 2: MetadataTagger] → 各ファイルをAI解析
+[Lambda 2: MetadataTagger × 3] → 各ファイルをAI解析（並列）
     ↓ (成功)
-metadata.jsonに追記 + metadata.txtログファイルに記録
+metadata.jsonに追記 + CloudWatch Logsに記録
     ↓ (エラー)
-Slack通知
+Slack通知 + CloudWatch Logsに記録
+    ↓
+[次の100件へループ or 完了]
 ```
+
+**ページネーション処理**: 万単位のファイルでも DataLimitExceeded を回避するため、100件ずつバッチ処理します。Step Functionsが自動的にループして全ファイルを処理します。
 
 ### 主要コンポーネント
 
 | コンポーネント | 役割 |
 |--------------|------|
-| **FileScanner** (Lambda) | S3バケット内のファイルリストを取得 |
+| **FileScanner** (Lambda) | S3バケットから100件ずつファイルリストを取得 |
 | **MetadataTagger** (Lambda) | 各ファイルをAIで解釈し、メタデータを更新 |
-| **Step Functions** | 処理全体のオーケストレーション |
+| **Step Functions** | 処理全体のオーケストレーション（ページネーションループ） |
 | **OpenAI API (GPT-5-mini)** | ファイル内容の解釈とタグ抽出 |
-| **S3 ログファイル** (metadata.txt) | 処理成功ログをタブ区切りで記録 |
+| **CloudWatch Logs** | 処理成功ログを構造化形式で記録 |
 | **Slack API** | エラー通知 |
 
 ---
@@ -59,7 +66,7 @@ Slack通知
 - Lambda、S3、Step Functionsへのアクセス権限
 
 ### 2. OpenAI APIキー
-- GPT-5-miniが利用可能なAPIキー
+- GPT-4o-miniが利用可能なAPIキー（Tier 3推奨）
 - 取得方法: https://platform.openai.com/api-keys
 
 ### 3. Slack Webhook URL（オプション）
@@ -77,7 +84,7 @@ Slack通知
 ```
 project/
 ├── file_scanner/
-│   ├── lambda_function.py          # Lambda 1のメインコード
+│   ├── lambda_function.py          # Lambda 1のメインコード（ページネーション対応）
 │   └── requirements.txt            # 依存パッケージ（空）
 ├── metadata_tagger/
 │   ├── lambda_function.py          # Lambda 2のメインコード
@@ -86,7 +93,7 @@ project/
 │   ├── slack_notifier.py           # Slack通知
 │   └── requirements.txt            # openai, requests
 ├── stepfunctions/
-│   └── state_machine.json          # Step Functions ASL定義
+│   └── state_machine.json          # Step Functions ASL定義（ページネーション対応）
 ├── layer/
 │   └── build_layer_docker.sh       # Lambda Layerビルドスクリプト（Docker版）
 └── README.md                       # このファイル
@@ -271,7 +278,7 @@ aws lambda publish-layer-version \
 
 8. **設定** → **環境変数** → **編集**
    - `OPENAI_API_KEY`: `sk-proj-...`（取得済みのOpenAI APIキー）
-   - `OPENAI_MODEL`: `gpt-5-mini`（使用するOpenAIモデル名、デフォルト: gpt-5-mini）
+   - `OPENAI_MODEL`: `gpt-5-mini`（使用するOpenAIモデル名）
    - `SLACK_WEBHOOK_URL`: `https://hooks.slack.com/services/...`（Slack Webhook URL）
    - `MAX_FILE_SIZE`: `10485760`（10MB）
    - **保存**
@@ -305,30 +312,9 @@ zip -r function.zip .
 3. タイプ: **標準**
 4. `stepfunctions/state_machine.json` の内容を貼り付け
 5. **以下の箇所を実際の値に置き換え**:
-   - `YOUR_BUCKET_NAME`: 処理対象のS3バケット名（2箇所あります）
-   - `REGION`: AWSリージョン（例: `ap-northeast-1`）
+   - `YOUR_BUCKET_NAME`: 処理対象のS3バケット名
+   - `REGION`: AWSリージョン（例: `us-west-2`）
    - `ACCOUNT_ID`: AWSアカウントID（例: `123456789012`）
-
-**置き換え箇所の例:**
-
-```json
-"ScanFiles": {
-  "Type": "Task",
-  "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:FileScanner",
-  "Parameters": {
-    "bucket": "YOUR_BUCKET_NAME"  ← ここを実際のバケット名に変更
-  },
-  ...
-},
-"PrepareFilesForProcessing": {
-  "Type": "Pass",
-  "Parameters": {
-    "bucket": "YOUR_BUCKET_NAME",  ← ここも実際のバケット名に変更
-    "files.$": "$.scanResult.files"
-  },
-  ...
-}
-```
 
 Lambda関数ARNの確認方法:
 - **Lambda** → 関数を開く → 右上の **関数ARN** をコピー
@@ -341,9 +327,7 @@ Lambda関数ARNの確認方法:
 
 ## 実行方法
 
-**注意**: バケット名はステートマシン定義に直接記載されているため、実行時に指定する必要はありません。
-
-### AWS Consoleから実行（全ファイル処理）
+### AWS Consoleから実行
 
 1. **Step Functions** → `S3MetadataTaggingStateMachine` を開く
 2. **実行の開始** をクリック
@@ -356,22 +340,88 @@ Lambda関数ARNの確認方法:
 4. **実行の開始**
 5. 実行状態を確認
 
-### AWS CLIから実行
+### 処理時間の目安
 
-```bash
-aws stepfunctions start-execution \
-  --state-machine-arn arn:aws:states:REGION:ACCOUNT_ID:stateMachine:S3MetadataTaggingStateMachine \
-  --input '{}'
+- **ファイル数**: 10,000ファイル
+- **並列度3**: 約9-10時間
+- **並列度1（順次）**: 約27時間
+
+### 並列度の変更
+
+処理速度を調整する場合、Step Functions の定義を編集:
+
+1. **Step Functions** → `S3MetadataTaggingStateMachine` → **編集**
+2. `ProcessBatch` ステートの `MaxConcurrency` を変更:
+
+```json
+"ProcessBatch": {
+  "Type": "Map",
+  "MaxConcurrency": 3,  // ← ここを変更（1-10推奨）
+  ...
+}
 ```
 
-### 処理対象バケットの変更
+**推奨値**:
+- 並列度1: 最も安全、競合なし、処理時間最長
+- 並列度3: バランス型（デフォルト）
+- 並列度5-10: 高速化（OpenAI Tier 3以上推奨）
 
-バケット名を変更する場合は、ステートマシン定義を更新してください:
+---
 
-1. **Step Functions** → `S3MetadataTaggingStateMachine` を開く
-2. **編集**をクリック
-3. `ScanFiles` ステートと `PrepareFilesForProcessing` ステートの `YOUR_BUCKET_NAME` を変更
-4. **保存**
+## ログの集約方法
+
+MetadataTagger は処理結果をCloudWatch Logsに構造化ログとして出力します。処理完了後、CloudWatch Logs Insights でログを集約し、CSV形式でエクスポートできます。
+
+### 手順
+
+#### 1. CloudWatch Logs Insights を開く
+
+1. AWS Management Console → **CloudWatch** を開く
+2. 左メニューから **Logs Insights** を選択
+3. ロググループで `/aws/lambda/MetadataTagger` を選択
+4. 時間範囲を設定（Step Functions の実行時間をカバーする範囲）
+
+#### 2. クエリを実行
+
+以下のクエリをコピー&ペーストして **「クエリを実行」** をクリック:
+
+```
+fields 
+    strcontains(@message, "metadata_updated") as is_metadata,
+    @timestamp as timestamp
+| filter is_metadata = 1
+| parse @message '"timestamp": "(?<処理日時>[^"]+)"'
+| parse @message '"file_key": "(?<フルパス>[^"]+)"'
+| parse @message '"parent_directory": "(?<親ディレクトリ>[^"]*)"'
+| parse @message '"file_name": "(?<ファイル名>[^"]+)"'
+| parse @message '"doc_type": "(?<doc_type>[^"]+)"'
+| parse @message '"doc_date": (?<doc_date>\d+|null)'
+| fields 処理日時, フルパス, 親ディレクトリ, ファイル名, doc_type, doc_date
+| sort timestamp asc
+```
+
+#### 3. CSV形式でエクスポート
+
+1. クエリ結果の右上にある **「アクション」** をクリック
+2. **「結果をダウンロード (CSV)」** を選択
+3. CSVファイルがダウンロードされます
+
+### 出力形式
+
+```csv
+処理日時,フルパス,親ディレクトリ,ファイル名,doc_type,doc_date
+2025-11-19T13:31:44,1. Test Inc./01 会社概要/株主名簿.pdf,01 会社概要,株主名簿.pdf,会社情報,20200731
+```
+
+### エラーログの確認
+
+処理エラーが発生したファイルを確認するクエリ:
+
+```
+fields @timestamp, @message
+| filter @message like /ERROR/ or @message like /Failed/
+| sort @timestamp desc
+```
 
 ---
 
@@ -392,7 +442,6 @@ aws stepfunctions start-execution \
 **FileScanner の場合:**
 
 ```bash
-# file_scanner ディレクトリで実行
 cd file_scanner
 zip function.zip lambda_function.py
 ```
@@ -400,7 +449,6 @@ zip function.zip lambda_function.py
 **MetadataTagger の場合:**
 
 ```bash
-# metadata_tagger ディレクトリで実行
 cd metadata_tagger
 zip -r function.zip .
 ```
@@ -411,120 +459,30 @@ AWS Consoleで:
 3. 作成した `function.zip` を選択
 4. **保存**
 
-#### 方法3: AWS CLIを使用
-
-**FileScanner の場合:**
-
-```bash
-cd file_scanner
-zip function.zip lambda_function.py
-
-aws lambda update-function-code \
-  --function-name FileScanner \
-  --zip-file fileb://function.zip
-```
-
-**MetadataTagger の場合:**
-
-```bash
-cd metadata_tagger
-zip -r function.zip .
-
-aws lambda update-function-code \
-  --function-name MetadataTagger \
-  --zip-file fileb://function.zip
-```
-
 ### Lambda Layerの更新
 
 依存パッケージ（pymupdf, openpyxl, openai, requests）を更新する場合:
 
 ```bash
-# 1. layer ディレクトリでビルド（Docker使用）
 cd layer
 bash build_layer_docker.sh
 
-# 2. S3にアップロード
 aws s3 cp python-dependencies.zip s3://your-bucket-name/lambda-layers/python-dependencies.zip
 
-# 3. 新しいバージョンのレイヤーを作成
 aws lambda publish-layer-version \
   --layer-name python-dependencies \
   --content S3Bucket=your-bucket-name,S3Key=lambda-layers/python-dependencies.zip \
   --compatible-runtimes python3.12
 ```
 
-レイヤーのバージョンが更新されたら、Lambda関数に新しいバージョンを割り当て:
-
-1. **Lambda** → `MetadataTagger` を開く
-2. **レイヤー**セクションで既存のレイヤーを削除
-3. **レイヤーの追加** → `python-dependencies` の最新バージョンを選択
-4. **追加**
+レイヤーのバージョンが更新されたら、Lambda関数に新しいバージョンを割り当て。
 
 ### Step Functions ステートマシンの更新
 
 1. **Step Functions** → `S3MetadataTaggingStateMachine` を開く
 2. **編集**をクリック
-3. **ワークフロースタジオ**または**コードエディタ**で修正
-   - コードエディタを選択すると、JSON定義を直接編集できます
-4. `stepfunctions/state_machine.json` の更新内容を貼り付け
-5. **`YOUR_BUCKET_NAME`、`REGION`、`ACCOUNT_ID` を実際の値に置き換えることを忘れずに**
-6. **保存**
-
-または、AWS CLIで:
-
-```bash
-# ステートマシンのARNを取得
-STATE_MACHINE_ARN=$(aws stepfunctions list-state-machines \
-  --query "stateMachines[?name=='S3MetadataTaggingStateMachine'].stateMachineArn" \
-  --output text)
-
-# 注意: state_machine.json内の YOUR_BUCKET_NAME, REGION, ACCOUNT_ID を
-# 実際の値に置き換えてから実行してください
-
-# 定義を更新
-aws stepfunctions update-state-machine \
-  --state-machine-arn $STATE_MACHINE_ARN \
-  --definition file://stepfunctions/state_machine.json
-```
-
-### 環境変数の更新
-
-Lambda関数の環境変数を変更する場合:
-
-1. **Lambda** → 対象の関数を開く
-2. **設定** → **環境変数** → **編集**
-3. 値を変更
+3. JSON定義を更新
 4. **保存**
-
-または、AWS CLIで:
-
-```bash
-aws lambda update-function-configuration \
-  --function-name MetadataTagger \
-  --environment "Variables={OPENAI_API_KEY=sk-proj-...,OPENAI_MODEL=gpt-5-mini,SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...,MAX_FILE_SIZE=10485760}"
-```
-
-### Lambda関数の設定変更（タイムアウト、メモリ等）
-
-1. **Lambda** → 対象の関数を開く
-2. **設定** → **一般設定** → **編集**
-3. タイムアウト、メモリ等を変更
-4. **保存**
-
-### 更新後の動作確認
-
-1. **Step Functions** → `S3MetadataTaggingStateMachine` を開く
-2. **実行の開始** で小規模なテストを実施
-
-```json
-{
-  "bucket": "your-bucket-name",
-  "prefix": "テスト用フォルダ/"
-}
-```
-
-3. CloudWatch Logs でエラーがないか確認
 
 ---
 
@@ -538,32 +496,6 @@ aws lambda update-function-configuration \
 - `/aws/lambda/MetadataTagger`
 - `/aws/states/S3MetadataTaggingStateMachine`
 
-### S3 ログファイル
-
-正常に処理されたファイルの記録は、S3バケットのルートにある `metadata.txt` に自動的に追記されます。
-
-**ファイル形式**: タブ区切り（TSV）
-
-**フィールド**:
-- 処理日時（YYYY-MM-DD HH:MM:SS形式）
-- フルパス（S3キー）
-- 親ディレクトリ（ファイルの1つ上のディレクトリ名）
-- ファイル名
-- doc_type（抽出されたドキュメント種別）
-- doc_date（抽出されたドキュメント日付、YYYYMMDD形式）
-
-**例**:
-```
-処理日時	フルパス	親ディレクトリ	ファイル名	doc_type	doc_date
-2025-01-09 14:23:45	会社A/投資契約書.pdf	会社A	投資契約書.pdf	投資	20250115
-2025-01-09 14:24:12	会社B/レポート.xlsx	会社B	レポート.xlsx	報告	20241225
-```
-
-**確認方法**:
-1. **S3** → 対象バケットを開く
-2. `metadata.txt` をダウンロード
-3. Excel等のスプレッドシートアプリで開く（タブ区切りとして認識されます）
-
 ### エラー通知
 
 エラーが発生した場合、Slackに以下の情報が通知されます:
@@ -576,6 +508,28 @@ aws lambda update-function-configuration \
 
 ## トラブルシューティング
 
+### 問題: Lambda.TooManyRequestsException (429エラー)
+
+**原因**: Lambda の同時実行数制限
+
+**対処**:
+1. Step Functions の `MaxConcurrency` を下げる（5 → 3 → 1）
+2. MetadataTagger に予約済み同時実行数を設定（10-20）
+3. 429エラーは自動的に5回リトライされます
+
+### 問題: 一部のファイルが処理されていない
+
+**原因**: 
+- ページネーション処理のバグ
+- Lambda タイムアウト
+- 429エラーでリトライ上限到達
+
+**対処**:
+1. CloudWatch Logs で FileScanner のログを確認
+2. Step Functions の実行イベント履歴を確認
+3. エラーログとSlack通知を確認
+4. 必要に応じて再実行
+
 ### 問題: Lambda タイムアウト
 
 **原因**: 大きなPDFファイルの処理
@@ -586,37 +540,19 @@ aws lambda update-function-configuration \
 
 ### 問題: OpenAI APIレート制限
 
-**原因**: 短時間に大量リクエスト
+**原因**: 並列度が高すぎる
 
 **対処**:
-- Step Functions の `MaxConcurrency` は既に1に設定済み（順次実行）
-- OpenAI アカウントのレート制限を確認
+- 並列度を下げる（3 → 1）
+- OpenAI アカウントの Tier を確認（Tier 3推奨）
 
-### 問題: metadata.jsonの形式が異なる
+### 問題: DataLimitExceeded エラー
 
-**原因**: 既存ファイルの形式が想定外
-
-**対処**:
-1. CloudWatch Logs でエラー内容を確認
-2. `metadata_tagger/lambda_function.py` の `update_metadata` 関数を調整
-
-### 問題: OpenAI APIキーまたはSlack Webhook URLが正しく設定されていない
-
-**原因**: Lambda環境変数の設定ミス
+**原因**: Step Functions のペイロードサイズ制限（256KB）超過
 
 **対処**:
-1. **Lambda** → `MetadataTagger` → **設定** → **環境変数** を確認
-2. `OPENAI_API_KEY`、`OPENAI_MODEL`、`SLACK_WEBHOOK_URL` が正しく設定されているか確認
-3. CloudWatch Logsでエラーメッセージを確認
-
-### 問題: S3アクセス権限エラー
-
-**原因**: IAMロールの権限不足
-
-**対処**:
-1. **IAM** → **ロール** → `S3MetadataLambdaRole` を確認
-2. S3ポリシーに `s3:ListBucket`、`s3:GetObject`、`s3:PutObject` 権限があるか確認
-3. バケット名が正しく設定されているか確認
+- ページネーション対応版のコードを使用していることを確認
+- FileScannerが100件ずつ返していることを確認
 
 ---
 
@@ -640,8 +576,12 @@ aws lambda update-function-configuration \
 
 ## 作成者
 
-しずお
+秋永
 
 ## バージョン
 
-1.0 (2025-01-09)
+2.0 (2025-11-19)
+- ページネーション対応追加
+- 並列処理対応（並列度設定可能）
+- ログ出力をCloudWatch Logsに変更
+- 429エラー自動リトライ追加
