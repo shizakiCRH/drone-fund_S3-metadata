@@ -129,6 +129,15 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.error(error_msg)
         return build_error_response(file_key or "unknown", "invalid_input", error_msg)
 
+    # .metadata.jsonファイル自体はスキップ（通知なし）
+    if file_key.endswith('.metadata.json'):
+        logger.info(f"Skipping metadata file itself: {file_key}")
+        return {
+            "key": file_key,
+            "status": "skipped",
+            "message": "metadata.json file itself"
+        }
+
     try:
         # メタデータファイルのパスを構築
         metadata_key = f"{file_key}.metadata.json"
