@@ -153,11 +153,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
             # Slack通知を送信
             if SLACK_WEBHOOK_URL:
-                send_slack_notification(
+                send_error_notification(
                     webhook_url=SLACK_WEBHOOK_URL,
-                    file_key=file_key,
                     error_type="metadata_not_found",
-                    error_message=error_msg
+                    file_key=file_key,
+                    message=error_msg
                 )
 
             return build_error_response(file_key, "metadata_not_found", error_msg)
