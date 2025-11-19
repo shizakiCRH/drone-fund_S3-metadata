@@ -1,13 +1,23 @@
 {
-  "Comment": "S3ファイルメタデータ自動タグ付けシステム - バケット名はScanFilesのParametersで指定",
-  "StartAt": "ScanFiles",
+  "Comment": "S3ファイルメタデータ自動タグ付けシステム - ページネーション対応版（修正版）",
+  "StartAt": "InitializeScan",
   "States": {
-    "ScanFiles": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:FileScanner",
-      "Comment": "S3バケット内の全ファイルをスキャンし、.metadata.jsonを除くファイルリストを取得",
+    "InitializeScan": {
+      "Type": "Pass",
+      "Comment": "初期パラメータを設定",
       "Parameters": {
-        "bucket": "YOUR_BUCKET_NAME"
+        "bucket": "df-metadata-test",
+        "continuation_token": null
+      },
+      "Next": "ScanBatch"
+    },
+    "ScanBatch": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:058264334933:function:FileScanner",
+      "Comment": "S3バケットから100件ずつファイルをスキャン",
+      "Parameters": {
+        "bucket.$": "$.bucket",
+        "continuation_token.$": "$.continuation_token"
       },
       "ResultPath": "$.scanResult",
       "Retry": [
@@ -17,7 +27,7 @@
           ],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
-          "BackoffRate": 2.0,
+          "BackoffRate": 2,
           "Comment": "S3アクセスエラー等のリトライ"
         }
       ],
@@ -30,22 +40,36 @@
           "Next": "ScanFailure"
         }
       ],
-      "Next": "PrepareFilesForProcessing"
+      "Next": "CheckFilesExist"
+    },
+    "CheckFilesExist": {
+      "Type": "Choice",
+      "Comment": "スキャン結果にファイルが含まれているかチェック",
+      "Choices": [
+        {
+          "Variable": "$.scanResult.files[0]",
+          "IsPresent": true,
+          "Next": "PrepareFilesForProcessing"
+        }
+      ],
+      "Default": "CheckMoreFiles"
     },
     "PrepareFilesForProcessing": {
       "Type": "Pass",
-      "Comment": "各ファイルにバケット名を追加して、ProcessFilesに渡す形式を整える",
+      "Comment": "各ファイルにバケット名を追加",
       "Parameters": {
-        "bucket": "YOUR_BUCKET_NAME",
-        "files.$": "$.scanResult.files"
+        "bucket.$": "$.bucket",
+        "files.$": "$.scanResult.files",
+        "continuation_token.$": "$.scanResult.continuation_token",
+        "is_truncated.$": "$.scanResult.is_truncated"
       },
-      "Next": "ProcessFiles"
+      "Next": "ProcessBatch"
     },
-    "ProcessFiles": {
+    "ProcessBatch": {
       "Type": "Map",
       "ItemsPath": "$.files",
-      "MaxConcurrency": 1,
-      "Comment": "各ファイルを順次処理（並列度1で順次実行）",
+      "MaxConcurrency": 3,
+      "Comment": "各ファイルを並列処理（並列度3）",
       "Parameters": {
         "key.$": "$$.Map.Item.Value",
         "bucket.$": "$.bucket"
@@ -55,7 +79,7 @@
         "States": {
           "TagMetadata": {
             "Type": "Task",
-            "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:MetadataTagger",
+            "Resource": "arn:aws:lambda:us-west-2:058264334933:function:MetadataTagger",
             "Comment": "ファイルからメタデータを抽出してmetadata.jsonを更新",
             "Retry": [
               {
@@ -64,7 +88,7 @@
                 ],
                 "IntervalSeconds": 1,
                 "MaxAttempts": 2,
-                "BackoffRate": 2.0,
+                "BackoffRate": 2,
                 "Comment": "一時的なエラーのリトライ"
               }
             ],
@@ -94,15 +118,36 @@
           }
         }
       },
-      "ResultPath": "$.results",
-      "Next": "GenerateSummary"
+      "ResultPath": "$.batchResult",
+      "Next": "CheckMoreFiles"
+    },
+    "CheckMoreFiles": {
+      "Type": "Choice",
+      "Comment": "さらに処理すべきファイルがあるかチェック",
+      "Choices": [
+        {
+          "Variable": "$.is_truncated",
+          "BooleanEquals": true,
+          "Next": "PrepareNextBatch"
+        }
+      ],
+      "Default": "GenerateSummary"
+    },
+    "PrepareNextBatch": {
+      "Type": "Pass",
+      "Comment": "次のバッチ処理のためにパラメータを準備",
+      "Parameters": {
+        "bucket.$": "$.bucket",
+        "continuation_token.$": "$.continuation_token"
+      },
+      "Next": "ScanBatch"
     },
     "GenerateSummary": {
       "Type": "Pass",
-      "Comment": "処理結果のサマリーを生成（オプション）",
-      "Parameters": {
-        "totalFiles.$": "States.ArrayLength($.results)",
-        "results.$": "$.results"
+      "Comment": "処理完了",
+      "Result": {
+        "status": "completed",
+        "message": "All files processed"
       },
       "End": true
     },
