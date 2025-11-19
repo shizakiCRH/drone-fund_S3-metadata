@@ -26,7 +26,14 @@ try:
     import openpyxl
 except ImportError:
     openpyxl = None
-    logging.warning("openpyxl is not available. Excel processing will be disabled.")
+    logging.warning("openpyxl is not available. Excel (.xlsx) processing will be disabled.")
+
+# 古い形式のExcel (.xls) 処理用
+try:
+    import xlrd
+except ImportError:
+    xlrd = None
+    logging.warning("xlrd is not available. Excel (.xls) processing will be disabled.")
 
 logger = logging.getLogger()
 
@@ -137,6 +144,8 @@ def extract_excel_text(content: bytes) -> str:
     """
     ExcelファイルからテキストをCSV形式で抽出する
 
+    .xlsx形式（新しいExcel）と.xls形式（古いExcel）の両方に対応
+
     Args:
         content (bytes): Excelファイルのバイナリコンテンツ
 
@@ -147,54 +156,108 @@ def extract_excel_text(content: bytes) -> str:
         FileProcessingError: Excel処理中にエラーが発生した場合
     """
 
-    if openpyxl is None:
-        raise FileProcessingError("openpyxl is not installed. Cannot process Excel files.")
+    if openpyxl is None and xlrd is None:
+        raise FileProcessingError("openpyxl and xlrd are not installed. Cannot process Excel files.")
 
+    # まず.xlsx形式として試行
     try:
-        # バイナリコンテンツからワークブックを開く
-        workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        if openpyxl:
+            return _extract_xlsx_text(content)
+    except Exception as xlsx_error:
+        logger.info(f".xlsx format failed: {str(xlsx_error)}, trying .xls format...")
 
-        text_parts = []
-        sheet_names = workbook.sheetnames
+        # .xlsx形式で失敗したら.xls形式を試す
+        try:
+            if xlrd:
+                return _extract_xls_text(content)
+        except Exception as xls_error:
+            # 両方失敗した場合
+            error_msg = f"Failed to extract text from Excel. xlsx error: {str(xlsx_error)}, xls error: {str(xls_error)}"
+            logger.error(error_msg)
+            raise FileProcessingError(error_msg)
 
-        logger.info(f"Excel has {len(sheet_names)} sheets: {sheet_names}")
+    raise FileProcessingError("No Excel library available")
 
-        # 各シートを処理（最大1シートのみ - ドキュメント種別判別に十分）
-        max_sheets = min(len(sheet_names), 1)
-        for sheet_name in sheet_names[:max_sheets]:
-            sheet = workbook[sheet_name]
 
-            text_parts.append(f"=== Sheet: {sheet_name} ===")
+def _extract_xlsx_text(content: bytes) -> str:
+    """
+    .xlsx形式のExcelファイルからテキストを抽出（openpyxl使用）
+    """
+    workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    text_parts = []
+    sheet_names = workbook.sheetnames
 
-            # シートの内容を行ごとに読み取り（最大15行まで）
-            max_rows = min(sheet.max_row, 15)
-            for row_idx, row in enumerate(sheet.iter_rows(max_row=max_rows, values_only=True), start=1):
-                # 空行をスキップ
-                if all(cell is None or str(cell).strip() == '' for cell in row):
-                    continue
+    logger.info(f"Excel (.xlsx) has {len(sheet_names)} sheets: {sheet_names}")
 
-                # セルの値をタブ区切りで結合
-                row_text = "\t".join([str(cell) if cell is not None else '' for cell in row])
-                text_parts.append(row_text)
+    # 各シートを処理（最大1シートのみ - ドキュメント種別判別に十分）
+    max_sheets = min(len(sheet_names), 1)
+    for sheet_name in sheet_names[:max_sheets]:
+        sheet = workbook[sheet_name]
+        text_parts.append(f"=== Sheet: {sheet_name} ===")
 
-                # デバッグ用: 最初の5行のみログ出力
-                if row_idx <= 5:
-                    logger.info(f"Row {row_idx}: {row_text[:100]}...")
+        # シートの内容を行ごとに読み取り（最大15行まで）
+        max_rows = min(sheet.max_row, 15)
+        for row_idx, row in enumerate(sheet.iter_rows(max_row=max_rows, values_only=True), start=1):
+            # 空行をスキップ
+            if all(cell is None or str(cell).strip() == '' for cell in row):
+                continue
 
-        workbook.close()
+            # セルの値をタブ区切りで結合
+            row_text = "\t".join([str(cell) if cell is not None else '' for cell in row])
+            text_parts.append(row_text)
 
-        # 全シートのテキストを結合
-        full_text = "\n".join(text_parts)
+            # デバッグ用: 最初の5行のみログ出力
+            if row_idx <= 5:
+                logger.info(f"Row {row_idx}: {row_text[:100]}...")
 
-        # テキストが空の場合は警告
-        if not full_text.strip():
-            logger.warning("Excel contains no extractable text")
+    workbook.close()
+    full_text = "\n".join(text_parts)
 
-        return full_text
+    if not full_text.strip():
+        logger.warning("Excel contains no extractable text")
 
-    except Exception as e:
-        logger.error(f"Error extracting text from Excel: {str(e)}")
-        raise FileProcessingError(f"Failed to extract text from Excel: {str(e)}")
+    return full_text
+
+
+def _extract_xls_text(content: bytes) -> str:
+    """
+    .xls形式のExcelファイルからテキストを抽出（xlrd使用）
+    """
+    workbook = xlrd.open_workbook(file_contents=content)
+    text_parts = []
+    sheet_names = workbook.sheet_names()
+
+    logger.info(f"Excel (.xls) has {len(sheet_names)} sheets: {sheet_names}")
+
+    # 各シートを処理（最大1シートのみ）
+    max_sheets = min(len(sheet_names), 1)
+    for sheet_name in sheet_names[:max_sheets]:
+        sheet = workbook.sheet_by_name(sheet_name)
+        text_parts.append(f"=== Sheet: {sheet_name} ===")
+
+        # シートの内容を行ごとに読み取り（最大15行まで）
+        max_rows = min(sheet.nrows, 15)
+        for row_idx in range(max_rows):
+            row = sheet.row_values(row_idx)
+
+            # 空行をスキップ
+            if all(cell == '' or str(cell).strip() == '' for cell in row):
+                continue
+
+            # セルの値をタブ区切りで結合
+            row_text = "\t".join([str(cell) for cell in row])
+            text_parts.append(row_text)
+
+            # デバッグ用: 最初の5行のみログ出力
+            if row_idx < 5:
+                logger.info(f"Row {row_idx + 1}: {row_text[:100]}...")
+
+    full_text = "\n".join(text_parts)
+
+    if not full_text.strip():
+        logger.warning("Excel contains no extractable text")
+
+    return full_text
 
 
 def extract_text_file(content: bytes) -> str:

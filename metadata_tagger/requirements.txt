@@ -3,6 +3,7 @@
 # 注意: 以下のパッケージはLambda Layerに含めるため、ここには記載しません:
 # - pymupdf (fitz)
 # - openpyxl
+# - xlrd
 #
 # Lambda Layer については layer/build_layer.sh を参照してください。
 

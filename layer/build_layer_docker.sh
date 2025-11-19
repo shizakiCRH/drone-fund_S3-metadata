@@ -57,6 +57,7 @@ docker run --rm \
         pip install \
             pymupdf \
             openpyxl \
+            xlrd \
             openai \
             requests \
             -t python/ \
