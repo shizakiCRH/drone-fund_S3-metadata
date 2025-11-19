@@ -10,10 +10,24 @@ S3ファイルを1つ処理し、OpenAI APIでメタデータを抽出して既�
 - 既存の metadata.json に追記・更新
 - エラー時は Slack 通知を送信
 
-入力（Step Functions Map Stateから）:
+入力形式（2種類に対応）:
+
+1. Step Functions Map Stateから:
 {
     "key": "会社A/カテゴリ1/document1.pdf",
     "bucket": "your-bucket-name"
+}
+
+2. S3イベント通知から:
+{
+    "Records": [
+        {
+            "s3": {
+                "bucket": {"name": "your-bucket-name"},
+                "object": {"key": "会社A/カテゴリ1/document1.pdf"}
+            }
+        }
+    ]
 }
 
 出力:
@@ -37,6 +51,8 @@ import os
 import json
 import logging
 import boto3
+import urllib.parse
+import time
 from datetime import datetime
 from typing import Dict, Any, Tuple
 
@@ -73,10 +89,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Lambda関数のメインハンドラー
 
+    Step FunctionsとS3イベント通知の両方に対応
+
     Args:
-        event: Step Functions Map Stateからの入力
-            - key (str): ファイルのS3キー
-            - bucket (str): S3バケット名
+        event: 以下のいずれかの形式
+            - Step Functions形式: {"key": "...", "bucket": "..."}
+            - S3イベント形式: {"Records": [{"s3": {...}}]}
         context: Lambda実行コンテキスト
 
     Returns:
@@ -85,8 +103,23 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             エラー時: {"key": "...", "status": "error", "error_type": "...", "message": "..."}
     """
 
-    file_key = event.get('key')
-    bucket_name = event.get('bucket')
+    # S3イベント通知からの呼び出しかどうかを判定
+    if 'Records' in event and len(event['Records']) > 0:
+        # S3イベント通知形式
+        record = event['Records'][0]
+        if 's3' in record:
+            bucket_name = record['s3']['bucket']['name']
+            file_key = record['s3']['object']['key']
+            # URLエンコードされたキーをデコード
+            file_key = urllib.parse.unquote_plus(file_key)
+        else:
+            error_msg = "Invalid S3 event format"
+            logger.error(error_msg)
+            return build_error_response("unknown", "invalid_input", error_msg)
+    else:
+        # Step Functions形式
+        file_key = event.get('key')
+        bucket_name = event.get('bucket')
 
     logger.info(f"Processing file: {file_key} in bucket: {bucket_name}")
 
@@ -100,10 +133,34 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         # メタデータファイルのパスを構築
         metadata_key = f"{file_key}.metadata.json"
 
-        # 1. metadata.jsonの存在確認
-        if not metadata_file_exists(bucket_name, metadata_key):
-            logger.info(f"metadata.json not found for {file_key}, skipping")
-            return build_error_response(file_key, "metadata_not_found", "No metadata.json found for this file")
+        # 1. metadata.jsonの存在確認（最大3回リトライ）
+        metadata_found = False
+        max_retries = 3
+        retry_delay = 1  # 秒
+
+        for attempt in range(max_retries):
+            if metadata_file_exists(bucket_name, metadata_key):
+                metadata_found = True
+                break
+
+            if attempt < max_retries - 1:  # 最後の試行ではsleepしない
+                logger.info(f"metadata.json not found yet, retrying in {retry_delay} second(s)... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+
+        if not metadata_found:
+            error_msg = f"No metadata.json found for {file_key} after {max_retries} attempts"
+            logger.error(error_msg)
+
+            # Slack通知を送信
+            if SLACK_WEBHOOK_URL:
+                send_slack_notification(
+                    webhook_url=SLACK_WEBHOOK_URL,
+                    file_key=file_key,
+                    error_type="metadata_not_found",
+                    error_message=error_msg
+                )
+
+            return build_error_response(file_key, "metadata_not_found", error_msg)
 
         # 2. ファイルを取得
         file_content = get_file_from_s3(bucket_name, file_key, MAX_FILE_SIZE)
@@ -134,8 +191,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         # 7. S3に書き戻し
         write_metadata_json(bucket_name, metadata_key, metadata)
 
-        # 8. ログファイルに記録を追記
-        append_to_log_file(bucket_name, file_key, doc_type, doc_date)
+        # 8. ログに記録を追記
+        log_processing_result(file_key, doc_type, doc_date)
 
         logger.info(f"Successfully processed {file_key}: doc_type={doc_type}, doc_date={doc_date}")
 
@@ -341,73 +398,6 @@ def write_metadata_json(bucket_name: str, metadata_key: str, metadata: Dict) -> 
         logger.error(f"Error writing metadata.json to S3: {str(e)}")
         raise FileProcessingError(f"Failed to write metadata.json to S3: {str(e)}")
 
-
-def append_to_log_file(bucket_name: str, file_key: str, doc_type: str, doc_date: int) -> None:
-    """
-    処理成功時にログファイルに記録を追記する
-
-    Args:
-        bucket_name (str): S3バケット名
-        file_key (str): 処理したファイルのキー（例: "会社A/カテゴリ1/document.pdf"）
-        doc_type (str): ドキュメント種別
-        doc_date (int): ドキュメント日付（YYYYMMDD形式）
-    """
-
-    try:
-        # ログファイルのキー
-        log_key = "metadata.txt"
-
-        # 処理日時（JST）
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # フルパス（ファイルキー）
-        full_path = file_key
-
-        # ファイルの１つ上のディレクトリ名とファイル名を抽出
-        parts = file_key.split('/')
-        if len(parts) >= 2:
-            parent_directory = parts[-2]  # １つ上のディレクトリ名
-            file_name = parts[-1]  # ファイル名
-        elif len(parts) == 1:
-            parent_directory = ""  # ディレクトリなし
-            file_name = parts[0]
-        else:
-            parent_directory = ""
-            file_name = ""
-
-        # doc_dateがNoneの場合は空文字列
-        doc_date_str = str(doc_date) if doc_date is not None else ""
-
-        # タブ区切りのログ行を作成
-        log_line = f"{timestamp}\t{full_path}\t{parent_directory}\t{file_name}\t{doc_type}\t{doc_date_str}\n"
-
-        # 既存のログファイルを取得（存在しない場合は空文字列）
-        try:
-            response = s3_client.get_object(Bucket=bucket_name, Key=log_key)
-            existing_content = response['Body'].read().decode('utf-8')
-        except s3_client.exceptions.NoSuchKey:
-            # ログファイルが存在しない場合はヘッダーを作成
-            existing_content = "処理日時\tフルパス\t親ディレクトリ\tファイル名\tdoc_type\tdoc_date\n"
-            logger.info(f"Log file does not exist, creating new one: {log_key}")
-
-        # ログ行を追記
-        new_content = existing_content + log_line
-
-        # S3に書き込み
-        s3_client.put_object(
-            Bucket=bucket_name,
-            Key=log_key,
-            Body=new_content.encode('utf-8'),
-            ContentType='text/plain; charset=utf-8'
-        )
-
-        logger.info(f"Successfully appended log to {log_key}: {log_line.strip()}")
-
-    except Exception as e:
-        # ログ記録失敗はエラーとしてログに出力するが、処理は継続
-        logger.error(f"Failed to append to log file: {str(e)}", exc_info=True)
-
-
 def handle_error(file_key: str, error_type: str, message: str) -> Dict[str, Any]:
     """
     エラーを処理し、Slack通知を送信して、エラーレスポンスを返す
@@ -457,6 +447,51 @@ def build_error_response(file_key: str, error_type: str, message: str) -> Dict[s
         "error_type": error_type,
         "message": message
     }
+
+def log_processing_result(file_key: str, doc_type: str, doc_date: int) -> None:
+    """
+    処理成功時に構造化ログを出力する
+    CloudWatch Logs Insights でCSVエクスポート可能な形式
+
+    Args:
+        file_key (str): 処理したファイルのキー（例: "会社A/カテゴリ1/document.pdf"）
+        doc_type (str): ドキュメント種別
+        doc_date (int): ドキュメント日付（YYYYMMDD形式、またはNone）
+    """
+
+    try:
+        # 処理日時（ISO 8601形式）
+        timestamp = datetime.now().isoformat()
+
+        # ファイルの１つ上のディレクトリ名とファイル名を抽出
+        parts = file_key.split('/')
+        if len(parts) >= 2:
+            parent_directory = parts[-2]  # １つ上のディレクトリ名
+            file_name = parts[-1]  # ファイル名
+        elif len(parts) == 1:
+            parent_directory = ""  # ディレクトリなし
+            file_name = parts[0]
+        else:
+            parent_directory = ""
+            file_name = ""
+
+        # 構造化ログを出力（JSON形式）
+        log_entry = {
+            'event': 'metadata_updated',
+            'timestamp': timestamp,
+            'file_key': file_key,
+            'parent_directory': parent_directory,
+            'file_name': file_name,
+            'doc_type': doc_type,
+            'doc_date': doc_date if doc_date is not None else None
+        }
+
+        # JSON形式でログ出力（ensure_ascii=Falseで日本語をそのまま出力）
+        logger.info(json.dumps(log_entry, ensure_ascii=False))
+
+    except Exception as e:
+        # ログ出力失敗はエラーとしてログに出力するが、処理は継続
+        logger.error(f"Failed to log processing result: {str(e)}", exc_info=True)
 
 
 # ローカルテスト用のメイン関数
