@@ -58,6 +58,7 @@ docker run --rm \
             pymupdf \
             openpyxl \
             xlrd \
+            python-docx \
             openai \
             requests \
             -t python/ \

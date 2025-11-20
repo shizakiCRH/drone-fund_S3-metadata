@@ -4,6 +4,7 @@
 # - pymupdf (fitz)
 # - openpyxl
 # - xlrd
+# - python-docx
 #
 # Lambda Layer については layer/build_layer.sh を参照してください。
 

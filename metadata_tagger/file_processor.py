@@ -2,11 +2,12 @@
 File Processor Module
 
 ファイル内容を抽出するモジュール。
-PDF、Excel、テキストファイルに対応しています。
+PDF、Excel、Word、テキストファイルに対応しています。
 
 サポートされているファイル形式:
 - PDF (.pdf): PyMuPDF (fitz) を使用してテキストを抽出
-- Excel (.xlsx, .xls): openpyxl を使用してシート内容を読み取り
+- Excel (.xlsx, .xls): openpyxl、xlrd を使用してシート内容を読み取り
+- Word (.docx): python-docx を使用してテキストを抽出（.doc形式は非対応）
 - テキスト (.txt, .md, .csv等): 直接読み込み
 """
 
@@ -34,6 +35,13 @@ try:
 except ImportError:
     xlrd = None
     logging.warning("xlrd is not available. Excel (.xls) processing will be disabled.")
+
+# Word処理用ライブラリ（Lambda Layerに含まれる）
+try:
+    import docx
+except ImportError:
+    docx = None
+    logging.warning("python-docx is not available. Word (.docx) processing will be disabled.")
 
 logger = logging.getLogger()
 
@@ -82,6 +90,14 @@ def extract_text_from_file(file_key: str, file_content: bytes, max_size: int = 1
         return extract_pdf_text(file_content)
     elif file_key.lower().endswith(('.xlsx', '.xls')):
         return extract_excel_text(file_content)
+    elif file_key.lower().endswith('.docx'):
+        return extract_word_text(file_content)
+    elif file_key.lower().endswith('.doc'):
+        # 古いWord形式（.doc）は非対応
+        raise UnsupportedFileTypeError(
+            "Old Word format (.doc) is not supported. Please convert to .docx format. "
+            "古いWord形式（.doc）は非対応です。.docx形式に変換してください。"
+        )
     else:
         # その他のファイルはテキストとして読み込み
         return extract_text_file(file_content)
@@ -296,6 +312,59 @@ def extract_text_file(content: bytes) -> str:
     except Exception as e:
         logger.error(f"Error reading text file: {str(e)}")
         raise FileProcessingError(f"Failed to read text file: {str(e)}")
+
+
+def extract_word_text(content: bytes) -> str:
+    """
+    Wordファイルからテキストを抽出する
+
+    .docx形式（Office 2007以降）のみ対応
+    .doc形式（Office 2003以前）は非対応
+
+    Args:
+        content (bytes): Wordファイルのバイナリコンテンツ（.docx形式）
+
+    Returns:
+        str: 抽出されたテキスト
+
+    Raises:
+        FileProcessingError: Word処理中にエラーが発生した場合
+    """
+
+    if docx is None:
+        raise FileProcessingError("python-docx is not installed. Cannot process Word files.")
+
+    try:
+        # .docx形式として処理
+        doc = docx.Document(io.BytesIO(content))
+
+        text_parts = []
+
+        # 段落ごとにテキストを抽出
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                text_parts.append(paragraph.text)
+
+        # テーブル内のテキストも抽出
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text.strip():
+                        text_parts.append(cell.text)
+
+        full_text = "\n".join(text_parts)
+
+        # デバッグ用: 最初の200文字のみログ出力
+        logger.info(f"Word document preview: {full_text[:200]}...")
+
+        if not full_text.strip():
+            logger.warning("Word document contains no extractable text")
+
+        return full_text
+
+    except Exception as e:
+        logger.error(f"Error extracting text from Word: {str(e)}")
+        raise FileProcessingError(f"Failed to extract text from Word: {str(e)}")
 
 
 def truncate_text(text: str, max_length: int = 500) -> str:
