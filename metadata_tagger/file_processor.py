@@ -93,11 +93,10 @@ def extract_text_from_file(file_key: str, file_content: bytes, max_size: int = 1
     elif file_key.lower().endswith('.docx'):
         return extract_word_text(file_content)
     elif file_key.lower().endswith('.doc'):
-        # 古いWord形式（.doc）は非対応
-        raise UnsupportedFileTypeError(
-            "Old Word format (.doc) is not supported. Please convert to .docx format. "
-            "古いWord形式（.doc）は非対応です。.docx形式に変換してください。"
-        )
+        # 古いWord形式（.doc）はファイル内容を解析せず、パスのみで判定
+        # lambda_function.py側でスキップされるため、通常ここには到達しない
+        logger.info(".doc file detected in file_processor - content extraction skipped")
+        return ""  # 空文字を返す
     else:
         # その他のファイルはテキストとして読み込み
         return extract_text_file(file_content)

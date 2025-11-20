@@ -31,7 +31,7 @@ class AIParseError(OpenAIClientError):
 def extract_metadata_with_ai(
     api_key: str,
     file_path: str,
-    file_content: str,
+    file_content: Optional[str],
     model: str = "gpt-5"
 ) -> Tuple[Optional[str], Optional[int]]:
     """
@@ -40,7 +40,8 @@ def extract_metadata_with_ai(
     Args:
         api_key (str): OpenAI APIキー
         file_path (str): ファイルのS3キー（パス）
-        file_content (str): ファイルから抽出されたテキスト内容
+        file_content (Optional[str]): ファイルから抽出されたテキスト内容
+                                      .docファイルの場合はNone
         model (str): 使用するOpenAIモデル。デフォルトは "gpt-5"
 
     Returns:
@@ -60,8 +61,12 @@ def extract_metadata_with_ai(
         # OpenAIクライアントの初期化
         client = OpenAI(api_key=api_key)
 
-        # プロンプトの構築
-        prompt = build_prompt(file_path, file_content)
+        # プロンプトの構築（.docの場合はパスのみ、それ以外は通常プロンプト）
+        if file_content is None:
+            logger.info("Using path-only prompt for .doc file")
+            prompt = build_path_only_prompt(file_path)
+        else:
+            prompt = build_prompt(file_path, file_content)
 
         logger.info(f"Calling OpenAI API with model: {model}")
 
@@ -109,6 +114,106 @@ def extract_metadata_with_ai(
     except Exception as e:
         logger.error(f"Error calling OpenAI API: {str(e)}", exc_info=True)
         raise OpenAIClientError(f"Failed to extract metadata with AI: {str(e)}")
+
+
+def build_path_only_prompt(file_path: str) -> str:
+    """
+    ファイルパスのみからメタデータを抽出するプロンプト（.doc用）
+
+    Args:
+        file_path (str): ファイルパス
+
+    Returns:
+        str: 構築されたプロンプト
+    """
+
+    prompt = f"""あなたはドキュメント分析の専門家です。以下のファイルパスとファイル名から、ドキュメント種別（doc_type）と日付（doc_date）を判定してください。
+
+**重要: ファイルの内容は利用できません。パスとファイル名のみで判定してください。**
+
+ファイルパス: {file_path}
+
+以下の情報を抽出してください:
+
+1. doc_type: ドキュメントのカテゴリ
+   以下のカテゴリから最も適切なものを選択してください:
+
+   - 会社情報: 株主名簿、shareholders register、定款、articles of incorporation、履歴事項、登記簿、registry、謄本、certified copy、規程
+   - 営業資料: 営業資料、sales deck、会社案内、company profile、事業紹介、business overview
+   - 財務諸表: 決算、financial statements、試算表、trial balance、貸借対照表、balance sheet、損益計算書、profit and loss、P&L、PL、BS、キャッシュフロー、cash flow、FS、TB、税務申告、勘定科目内訳書
+   - 株主総会: 株主総会、shareholders meeting、AGM、EGM、種類総会、招集通知、議案、議決、議事録
+   - 取締役会: 取締役会、board pack、board minutes、経営会議、executive meeting、議案、議事録
+   - 報告資料: 月次、monthly、KPI、report、dashboard、事業報告、株主報告会、株主説明会、定例
+   - 事業計画: 事業計画、business plan、利益計画、profit plan、売上計画、sales plan、収支計画、budget、全社戦略、corporate strategy、中期計画、mid term
+   - 投資: 投資計画、investment plan、投資委員会、investment committee、募集株式、share issuance、term sheet、shareholder agreement、lock up、round、series、株主間契約、投資契約、株式、株主分配
+   - 資本政策: 資本政策、equity strategy、capital policy、エクイティ
+   - その他: 上記のいずれにも該当しない場合
+
+   ※ファイルパスから最も適切なカテゴリを判断してください
+
+2. doc_date: ドキュメントの発行日付（YYYYMMDD形式の数値）
+
+   **【重要】日付抽出の手順:**
+   1. **ファイル名・ディレクトリ名をチェックしてください**
+   2. YYYYMMDD形式またはYYMMDD形式の日付が見つかった場合 → その日付を採用
+   3. 見つからなかった場合 → null
+
+   - **日付の形式**:
+     - **YYYYMMDD形式（8桁の日付数字）**: ファイルパスの**どこに含まれていても**抽出してください
+       - 以下のいずれの区切り文字でも日付として認識:
+         - 8桁連続: "20210802", "_20220701_"
+         - ハイフン区切り: "2025-04-17"
+         - スラッシュ区切り: "2025/04/17"
+         - ドット区切り: "2025.04.17", "2021.08.02", "2023.3.31"
+       - 具体例:
+         - "別添_PwC株式価値算定書(2023.3.31時点).doc" → 20230331を採用
+         - "1号議案_別紙(Starr_Management_Liability_見積書2021.08.02).doc" → 20210802を採用
+         - "AAA_試験計画_20191225.doc" → 20191225を採用
+         - "contract_20220701.doc", "議事録_20250417.doc"
+
+     - **YYMMDD形式（6桁の日付数字）**: ファイルパスの**どこに含まれていても**抽出してください
+       - 以下のいずれの区切り文字でも日付として認識:
+         - 6桁連続: "210802", "_220701_"
+         - ハイフン区切り: "25-04-17"
+         - スラッシュ区切り: "25/04/17"
+         - ドット区切り: "25.04.17", "21.08.02", "23.3.31"
+       - 例: "250417_report.doc", "見積書21.08.02.doc"
+       - YYMMDD形式の場合、YYが00〜99の場合は2000年代として扱う（例: 25→2025, 21→2021, 23→2023）
+
+   - **採用する日付形式**:
+     - YYYYMMDD形式: "20250417", "2025/04/17", "2025-04-17", "2025.04.17", "2025年4月17日"
+     - YYYYMM形式: "202504", "2025/04", "2025年4月" → 20250401（日が不明な場合は01日）
+     - YYYY年月: "2025年" → 20250101（月日が不明な場合は0101）
+
+   - **除外する日付形式**:
+     - **YYYY形式の4桁数字のみ**: "2025", "2024" などの単独の年号は採用しない
+
+   - 妥当性検証:
+     - 2000年〜2099年の範囲内の日付のみ採用
+     - 存在しない日付（例: 20250230、20251332）は採用しない
+     - 検証に失敗した場合は null を返す
+
+   - **重要**: 日付に関する明確な文字列が見つからない場合は、無理に日付を推測せず null を返してください
+
+返答は以下のJSON形式でお願いします（例1: 日付が見つかった場合）:
+{{
+  "doc_type": "会社情報",
+  "doc_date": 20250417
+}}
+
+返答例2（日付が見つからない場合）:
+{{
+  "doc_type": "財務諸表",
+  "doc_date": null
+}}
+
+注意事項:
+- doc_typeは上記のカテゴリ名（日本語）をそのまま使用してください
+- doc_dateは数値型（YYYYMMDD形式）で返すか、見つからない場合は null（文字列ではなくJSONのnull値）を返してください
+- 必ずJSONのみを返し、説明文は含めないでください
+"""
+
+    return prompt
 
 
 def build_prompt(file_path: str, file_content: str) -> str:

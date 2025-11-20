@@ -175,10 +175,16 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         file_content = get_file_from_s3(bucket_name, file_key, MAX_FILE_SIZE)
 
         # 3. ファイルからテキストを抽出
-        text_content = extract_text_from_file(file_key, file_content, MAX_FILE_SIZE)
+        # .doc形式の場合はファイル内容を使用せず、パスのみで判定
+        is_doc_file = file_key.lower().endswith('.doc')
 
-        # テキストを適切な長さに切り詰める（ドキュメント種別判別には先頭500文字で十分）
-        text_content = truncate_text(text_content, max_length=500)
+        if is_doc_file:
+            logger.info(f".doc file detected. Skipping content extraction and using path/filename only: {file_key}")
+            text_content = None  # ファイル内容は使用しない
+        else:
+            text_content = extract_text_from_file(file_key, file_content, MAX_FILE_SIZE)
+            # テキストを適切な長さに切り詰める（ドキュメント種別判別には先頭500文字で十分）
+            text_content = truncate_text(text_content, max_length=500)
 
         # 4. OpenAI APIでメタデータを抽出
         doc_type, doc_date = extract_metadata_with_ai(

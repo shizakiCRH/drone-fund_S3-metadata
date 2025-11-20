@@ -40,7 +40,7 @@ logger.setLevel(logging.INFO)
 s3_client = boto3.client('s3')
 
 # 1回のスキャンで取得する最大ファイル数
-MAX_KEYS = 100
+MAX_KEYS = 750
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
