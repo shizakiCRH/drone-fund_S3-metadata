@@ -1,0 +1,174 @@
+{
+  "Comment": "S3ファイルメタデータ自動タグ付けシステム - ページネーション対応版（修正版）",
+  "StartAt": "InitializeScan",
+  "States": {
+    "InitializeScan": {
+      "Type": "Pass",
+      "Comment": "初期パラメータを設定（prefixは実行時に受け取る、バケット名は固定）",
+      "Parameters": {
+        "bucket": "df-ai",
+        "prefix.$": "$.prefix",
+        "continuation_token": null
+      },
+      "Next": "ScanBatch"
+    },
+    "ScanBatch": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:FileScanner",
+      "Comment": "S3バケットから750件ずつファイルをスキャン",
+      "Parameters": {
+        "bucket.$": "$.bucket",
+        "prefix.$": "$.prefix",
+        "continuation_token.$": "$.continuation_token"
+      },
+      "ResultPath": "$.scanResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "Comment": "S3アクセスエラー等のリトライ"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "ScanFailure"
+        }
+      ],
+      "Next": "PrepareFilesForProcessing"
+    },
+    "PrepareFilesForProcessing": {
+      "Type": "Pass",
+      "Comment": "各ファイルにバケット名を追加",
+      "Parameters": {
+        "bucket.$": "$.bucket",
+        "prefix.$": "$.prefix",
+        "files.$": "$.scanResult.files",
+        "continuation_token.$": "$.scanResult.continuation_token",
+        "is_truncated.$": "$.scanResult.is_truncated"
+      },
+      "Next": "CheckFilesExist"
+    },
+    "CheckFilesExist": {
+      "Type": "Choice",
+      "Comment": "ファイルが存在する場合のみ処理",
+      "Choices": [
+        {
+          "Variable": "$.files[0]",
+          "IsPresent": true,
+          "Next": "ProcessBatch"
+        }
+      ],
+      "Default": "CheckMoreFiles"
+    },
+    "ProcessBatch": {
+      "Type": "Map",
+      "ItemsPath": "$.files",
+      "MaxConcurrency": 3,
+      "Comment": "各ファイルを並列処理（並列度3）",
+      "Parameters": {
+        "key.$": "$$.Map.Item.Value",
+        "bucket.$": "$.bucket"
+      },
+      "Iterator": {
+        "StartAt": "TagMetadata",
+        "States": {
+          "TagMetadata": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-west-2:971476708274:function:MetadataTagger",
+            "Comment": "ファイルからメタデータを抽出してmetadata.jsonを更新",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 5,
+                "BackoffRate": 2,
+                "Comment": "429エラーのリトライ（待機時間を長めに）"
+              },
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 2,
+                "BackoffRate": 2,
+                "Comment": "一時的なエラーのリトライ"
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "HandleError"
+              }
+            ],
+            "Next": "Success"
+          },
+          "HandleError": {
+            "Type": "Pass",
+            "Comment": "エラーが発生したファイルの処理結果を記録",
+            "Result": {
+              "status": "error"
+            },
+            "End": true
+          },
+          "Success": {
+            "Type": "Pass",
+            "Comment": "正常に処理されたファイルの結果を記録",
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.batchResult",
+      "Next": "CheckMoreFiles"
+    },
+    "CheckMoreFiles": {
+      "Type": "Choice",
+      "Comment": "さらに処理すべきファイルがあるかチェック",
+      "Choices": [
+        {
+          "Variable": "$.is_truncated",
+          "BooleanEquals": true,
+          "Next": "PrepareNextBatch"
+        }
+      ],
+      "Default": "GenerateSummary"
+    },
+    "PrepareNextBatch": {
+      "Type": "Pass",
+      "Comment": "次のバッチ処理のためにパラメータを準備",
+      "Parameters": {
+        "bucket.$": "$.bucket",
+        "prefix.$": "$.prefix",
+        "continuation_token.$": "$.continuation_token"
+      },
+      "Next": "ScanBatch"
+    },
+    "GenerateSummary": {
+      "Type": "Pass",
+      "Comment": "処理完了",
+      "Result": {
+        "status": "completed",
+        "message": "All files processed"
+      },
+      "End": true
+    },
+    "ScanFailure": {
+      "Type": "Fail",
+      "Comment": "ファイルスキャンに失敗した場合",
+      "Error": "FileScanFailed",
+      "Cause": "Failed to scan S3 bucket for files"
+    }
+  }
+}

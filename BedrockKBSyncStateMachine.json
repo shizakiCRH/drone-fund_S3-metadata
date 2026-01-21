@@ -1,0 +1,149 @@
+{
+  "Comment": "Sync multiple Bedrock KB data sources sequentially",
+  "StartAt": "StartIngestion_DS1",
+  "States": {
+    "StartIngestion_DS1": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_start_ingestion",
+      "Parameters": {
+        "dataSourceId": "QE8D3XBWTX"
+      },
+      "ResultPath": "$",
+      "Next": "CheckIngestion_DS1"
+    },
+    "CheckIngestion_DS1": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_check_ingestion",
+      "Parameters": {
+        "dataSourceId": "QE8D3XBWTX",
+        "jobId.$": "$.jobId"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 120,
+          "MaxAttempts": 99999999,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Next": "StartIngestion_DS2"
+    },
+    "StartIngestion_DS2": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_start_ingestion",
+      "Parameters": {
+        "dataSourceId": "KNQBSAKY38"
+      },
+      "ResultPath": "$",
+      "Next": "CheckIngestion_DS2"
+    },
+    "CheckIngestion_DS2": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_check_ingestion",
+      "Parameters": {
+        "dataSourceId": "KNQBSAKY38",
+        "jobId.$": "$.jobId"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 120,
+          "MaxAttempts": 99999999,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Next": "StartIngestion_DS3"
+    },
+    "StartIngestion_DS3": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_start_ingestion",
+      "Parameters": {
+        "dataSourceId": "J2JGKKIVNA"
+      },
+      "ResultPath": "$",
+      "Next": "CheckIngestion_DS3"
+    },
+    "CheckIngestion_DS3": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_check_ingestion",
+      "Parameters": {
+        "dataSourceId": "J2JGKKIVNA",
+        "jobId.$": "$.jobId"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 120,
+          "MaxAttempts": 99999999,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Next": "StartIngestion_DS4"
+    },
+    "StartIngestion_DS4": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_start_ingestion",
+      "Parameters": {
+        "dataSourceId": "UFIATPFB8F"
+      },
+      "ResultPath": "$",
+      "Next": "CheckIngestion_DS4"
+    },
+    "CheckIngestion_DS4": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_check_ingestion",
+      "Parameters": {
+        "dataSourceId": "UFIATPFB8F",
+        "jobId.$": "$.jobId"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 120,
+          "MaxAttempts": 99999999,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Next": "StartIngestion_DS5"
+    },
+    "StartIngestion_DS5": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_start_ingestion",
+      "Parameters": {
+        "dataSourceId": "E9KZXUPKY0"
+      },
+      "ResultPath": "$",
+      "Next": "CheckIngestion_DS5"
+    },
+    "CheckIngestion_DS5": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-west-2:971476708274:function:bedrock_sync_check_ingestion",
+      "Parameters": {
+        "dataSourceId": "E9KZXUPKY0",
+        "jobId.$": "$.jobId"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 120,
+          "MaxAttempts": 99999999,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Next": "Done"
+    },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}
